@@ -53,12 +53,31 @@ Production must have (backend `env.ts` fails fast if missing/malformed):
 | `JWT_SECRET` | New random ≥ 32 chars — e.g. `openssl rand -hex 32`. Never reuse the dev secret |
 | `NODE_ENV` | `production` |
 | `PORT` | `3000` (Railway injects a port; leave unset or set to 3000) |
-| `FRONTEND_URL` / `CORS_ORIGIN` | At least one required in production. The future Next.js frontend origin, e.g. `https://<frontend-domain>`. Both are accepted; comma-separated for multiple |
+| `FRONTEND_URL` **or** `CORS_ORIGIN` | At least one required in production. The deployed Next.js frontend origin, e.g. `https://<frontend-domain>`. The two are aliases: set one, not both. Comma-separated for multiple |
 | `API_BASE_URL` | The deployed backend URL, e.g. `https://<service>.up.railway.app` (drives OpenAPI `servers` + docs) |
 | `JWT_EXPIRES_IN` | optional, default `1d` |
 | `MAX_UPLOAD_SIZE_MB`, `STORAGE_PROVIDER`, `STORAGE_LOCAL_DIR` | optional, defaults apply |
 
 Do **not** set: `DATABASE_URL` variants, migration flags, or anything secret in plaintext elsewhere.
+
+### The CORS variables, concretely
+
+`FRONTEND_URL` and `CORS_ORIGIN` are two names for the same setting, so **you only need one**:
+
+```bash
+FRONTEND_URL=https://your-frontend.up.railway.app
+```
+
+**Do not set the unused one to an empty string.** `CORS_ORIGIN=""` stops the service from starting, with:
+
+```
+[env] Invalid environment variables:
+  - CORS_ORIGIN: CORS_ORIGIN must not be empty
+```
+
+An empty value is read as "this variable is switched off but still present", not as "not configured", so it is rejected rather than quietly treated as absent. If you are deploying somewhere that requires the key to exist, give it a real value rather than `""` — or set the other one and leave this absent entirely.
+
+Each origin must be a **bare origin**: scheme, host and non-default port, with no path. `https://app.example.com` is right, `https://app.example.com/dashboard` is refused at boot. A trailing slash is tolerated but unnecessary. Getting this wrong is unusually costly, because a malformed value produces no CORS header at all: the backend boots, `/health` answers, the database connects, and every browser request is still refused with the evidence being a missing response header.
 
 ## 4. Deploy
 

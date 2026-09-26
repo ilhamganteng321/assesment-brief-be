@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { envSchema } from "./env";
 
@@ -256,5 +258,97 @@ describe("environment schema", () => {
 		});
 
 		expect(found.length).toBeGreaterThanOrEqual(3);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// The two CORS variables are aliases, and that is the part people get wrong when
+// filling in a deployment: only one of them is needed, and setting the other to
+// an empty string is not the way to say "unused".
+//
+// An empty string is present-but-unusable, so it is rejected rather than
+// treated as absent. The alternative — quietly reading it as "not set" — is
+// how an operator ends up disabling CORS by accident and finding out from a
+// browser instead of from the service.
+// ---------------------------------------------------------------------------
+describe("environment schema: the CORS alias pair", () => {
+	const production = {
+		DATABASE_URL: "postgresql://user:password@localhost:5432/app",
+		JWT_SECRET: "x".repeat(32),
+		NODE_ENV: "production",
+	} as const;
+
+	const issuesForProduction = (
+		overrides: Record<string, unknown>,
+	): readonly { path: string; message: string }[] => {
+		const result = envSchema.safeParse({ ...production, ...overrides });
+		return result.success
+			? []
+			: result.error.issues.map((issue) => ({
+					path: issue.path.join("."),
+					message: issue.message,
+				}));
+	};
+
+	test("FRONTEND_URL alone is enough", () => {
+		expect(
+			issuesForProduction({ FRONTEND_URL: "https://app.example.com" }),
+		).toEqual([]);
+	});
+
+	test("CORS_ORIGIN alone is enough", () => {
+		expect(
+			issuesForProduction({ CORS_ORIGIN: "https://app.example.com" }),
+		).toEqual([]);
+	});
+
+	// The one to guard: a reviewer copying .env.example verbatim should not be
+	// stopped by an empty optional variable they were meant to leave alone.
+	test("an empty CORS_ORIGIN is refused even when FRONTEND_URL is set", () => {
+		const found = issuesForProduction({
+			FRONTEND_URL: "https://app.example.com",
+			CORS_ORIGIN: "",
+		});
+
+		expect(found.some((issue) => issue.path === "CORS_ORIGIN")).toBe(true);
+	});
+
+	test("a whitespace-only CORS_ORIGIN is refused", () => {
+		const found = issuesForProduction({ CORS_ORIGIN: "   " });
+
+		expect(found.some((issue) => issue.path === "CORS_ORIGIN")).toBe(true);
+	});
+
+	test("omitting both is refused in production but fine in development", () => {
+		expect(
+			issuesForProduction({}).some((issue) => issue.path === "FRONTEND_URL"),
+		).toBe(true);
+		expect(issuesFor({ NODE_ENV: "development" })).toEqual([]);
+	});
+});
+
+describe(".env.example", () => {
+	const example = readFileSync(
+		join(import.meta.dir, "..", "..", ".env.example"),
+		"utf8",
+	);
+
+	// Anything set to "" reads as a deliberate "this is off" to a human, so the
+	// variable is present rather than absent, and the schema rejects it. The
+	// example file is the first thing a reviewer copies, so a placeholder in it
+	// is a boot failure waiting to happen.
+	test("no variable is set to an empty string", () => {
+		const empty = example
+			.split("\n")
+			.map((line) => line.trim())
+			.filter((line) => /^[A-Z0-9_]+=""$/.test(line));
+
+		expect(empty).toEqual([]);
+	});
+
+	test("it carries placeholders rather than plausible secrets", () => {
+		expect(example).toContain("JWT_SECRET=");
+		expect(example).toContain("DATABASE_URL=");
+		expect(example).not.toMatch(/eyJ[A-Za-z0-9_-]{10,}/);
 	});
 });
