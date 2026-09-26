@@ -30,7 +30,7 @@ relaxed CSP because it loads its own bundle; the OpenAPI document itself is at
 | `JWT_SECRET` | yes | At least 32 characters in production |
 | `PORT` | no | Defaults to `3000` |
 | `NODE_ENV` | no | `development` \| `test` \| `production` |
-| `FRONTEND_URL` / `CORS_ORIGIN` | production | Comma-separated allowed origins. Required in production |
+| `FRONTEND_URL` / `CORS_ORIGIN` | production | Comma-separated allowed origins. Each must be a bare origin (`https://app.example.com`) with no path, query, fragment or credentials; anything else is refused at boot. Required in production |
 | `API_BASE_URL` | no | Server URL advertised in the OpenAPI document |
 | `JWT_EXPIRES_IN` | no | Defaults to `1d` |
 | `MAX_UPLOAD_SIZE_MB` | no | Defaults to `10` |

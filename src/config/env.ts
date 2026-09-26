@@ -60,6 +60,48 @@ export const envSchema = z
 			.map((origin) => origin.trim())
 			.filter((origin) => origin.length > 0);
 
+		// A malformed origin is not a soft failure: it produces no CORS header at
+		// all, so the deployed frontend is simply refused by every request and
+		// the symptom points at the browser rather than at this file. Rejecting
+		// it at boot names the mistake while there is still someone to read it.
+		const originVariables = ["FRONTEND_URL", "CORS_ORIGIN"] as const;
+
+		for (const variable of originVariables) {
+			const value = data[variable];
+			if (value === undefined) {
+				continue;
+			}
+			for (const raw of value.split(",")) {
+				const trimmed = raw.trim();
+				if (trimmed.length === 0) {
+					continue;
+				}
+				// Same rule the CORS middleware applies, inlined rather than
+				// imported: this module must stay importable on its own, because
+				// the middleware reads the environment this file produces.
+				let valid = false;
+				try {
+					const url = new URL(trimmed);
+					valid =
+						(url.protocol === "http:" || url.protocol === "https:") &&
+						url.username === "" &&
+						url.password === "" &&
+						url.search === "" &&
+						url.hash === "" &&
+						(url.pathname === "/" || url.pathname === "");
+				} catch {
+					valid = false;
+				}
+				if (!valid) {
+					ctx.addIssue({
+						code: "custom",
+						path: [variable],
+						message: `${variable} must be a bare origin such as https://app.example.com (no path, credentials, query or fragment); got "${trimmed}"`,
+					});
+				}
+			}
+		}
+
 		if (data.NODE_ENV === "production") {
 			if (corsOrigins.length === 0) {
 				ctx.addIssue({

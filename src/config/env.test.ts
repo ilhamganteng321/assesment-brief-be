@@ -35,6 +35,24 @@ const issuesFor = (
 			}));
 };
 
+/** The input behind each label in the origin-format cases below. */
+const ORIGIN_CASES = {
+	"a bare origin": "https://app.example.com",
+	"a trailing slash": "https://app.example.com/",
+	"surrounding whitespace": "  https://app.example.com  ",
+	"an explicit default port": "https://app.example.com:443",
+	"an uppercase host": "https://APP.example.com",
+	"a missing scheme": "app.example.com",
+	"a path": "https://app.example.com/dashboard",
+	"a query string": "https://app.example.com?a=1",
+	"a fragment": "https://app.example.com#x",
+	"embedded credentials": "https://user:pass@app.example.com",
+	"a non-http scheme": "ftp://app.example.com",
+} as const;
+
+const valueFor = (label: keyof typeof ORIGIN_CASES): string =>
+	ORIGIN_CASES[label];
+
 describe("environment schema", () => {
 	test("a minimal development environment is accepted", () => {
 		expect(issuesFor({})).toEqual([]);
@@ -165,6 +183,68 @@ describe("environment schema", () => {
 					FRONTEND_URL: "https://a.example.com, https://b.example.com",
 				}),
 			).toEqual([]);
+		});
+	});
+
+	// A malformed origin produces no CORS header at all, so the deployed
+	// frontend is refused by every request while the symptom points at the
+	// browser. Catching it at boot is the difference between a five-second fix
+	// and an afternoon.
+	describe("origin format", () => {
+		const base = {
+			NODE_ENV: "production",
+			JWT_SECRET: "x".repeat(32),
+		} as const;
+
+		for (const label of [
+			"a bare origin",
+			"a trailing slash",
+			"surrounding whitespace",
+			"an explicit default port",
+			"an uppercase host",
+		] as const) {
+			test(`${label} is accepted`, () => {
+				expect(issuesFor({ ...base, FRONTEND_URL: valueFor(label) })).toEqual(
+					[],
+				);
+			});
+		}
+
+		for (const label of [
+			"a missing scheme",
+			"a path",
+			"a query string",
+			"a fragment",
+			"embedded credentials",
+			"a non-http scheme",
+		] as const) {
+			test(`${label} is refused`, () => {
+				const found = issuesFor({ ...base, FRONTEND_URL: valueFor(label) });
+
+				expect(found.some((issue) => issue.path === "FRONTEND_URL")).toBe(true);
+			});
+		}
+
+		// The same rule guards CORS_ORIGIN, which is the alias most deployments
+		// reach for when FRONTEND_URL is already taken.
+		test("a malformed CORS_ORIGIN is refused", () => {
+			const found = issuesFor({ ...base, CORS_ORIGIN: "app.example.com" });
+
+			expect(found.some((issue) => issue.path === "CORS_ORIGIN")).toBe(true);
+		});
+
+		// One bad entry in a list must not be allowed through by its good
+		// neighbours, and the message has to name the value that is wrong.
+		test("a bad entry in a list is refused and quoted back", () => {
+			const found = issuesFor({
+				...base,
+				FRONTEND_URL: "https://good.example.com, not-a-url",
+			});
+
+			expect(found.some((issue) => issue.path === "FRONTEND_URL")).toBe(true);
+			expect(found.some((issue) => issue.message.includes("not-a-url"))).toBe(
+				true,
+			);
 		});
 	});
 

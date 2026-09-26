@@ -11,6 +11,7 @@ import { app } from "../app";
 import { env } from "../config/env";
 import { HttpError } from "../lib/http-error";
 import type { AuthVariables } from "../middleware/auth";
+import { allowedOrigins, normalizeOrigin } from "../middleware/cors";
 import { errorHandler } from "../middleware/error-handler";
 import {
 	buildAuthRateLimitKey,
@@ -282,6 +283,103 @@ describe("security: security headers and CORS", () => {
 			headers: { Origin: "http://evil.example" },
 		});
 		expect(res.headers.get("access-control-allow-origin")).toBeNull();
+	});
+
+	// A browser sends scheme + host + optional non-default port and nothing
+	// else, so anything beyond that exact shape can never arrive from a real
+	// client. Rejecting it is safe; accepting it would mean echoing a header the
+	// browser never sent.
+	describe("origin normalisation", () => {
+		const accepted: readonly (readonly [string, string, string])[] = [
+			["a bare origin", "https://app.example.com", "https://app.example.com"],
+			// The natural way to type the variable, and the one that used to
+			// silently take the whole deployment down.
+			[
+				"a trailing slash, which a browser never sends",
+				"https://app.example.com/",
+				"https://app.example.com",
+			],
+			[
+				"surrounding whitespace",
+				"  https://app.example.com  ",
+				"https://app.example.com",
+			],
+			[
+				"an explicit default port",
+				"https://app.example.com:443",
+				"https://app.example.com",
+			],
+			[
+				"an uppercase host",
+				"https://APP.example.com",
+				"https://app.example.com",
+			],
+			[
+				"an explicit non-default port",
+				"http://localhost:3001",
+				"http://localhost:3001",
+			],
+		];
+
+		for (const [label, input, expected] of accepted) {
+			test(`${label} normalises`, () => {
+				expect(normalizeOrigin(input)).toBe(expected);
+			});
+		}
+
+		const rejected: readonly (readonly [string, string])[] = [
+			["a missing scheme", "app.example.com"],
+			["a path", "https://app.example.com/dashboard"],
+			["a query string", "https://app.example.com?a=1"],
+			["a fragment", "https://app.example.com#x"],
+			["embedded credentials", "https://user:pass@app.example.com"],
+			["a non-http scheme", "ftp://app.example.com"],
+			["an empty string", "   "],
+		];
+
+		for (const [label, input] of rejected) {
+			test(`${label} is refused`, () => {
+				expect(normalizeOrigin(input)).toBeNull();
+			});
+		}
+	});
+
+	// The end-to-end version of the same bug: an operator writes the origin with
+	// a trailing slash, the app boots without complaint, and then every request
+	// from the deployed frontend is refused by CORS.
+	test("a configured origin written with a trailing slash still allows the origin a browser sends", async () => {
+		const originalFrontendUrl = env.FRONTEND_URL;
+		try {
+			env.FRONTEND_URL = "https://app.example.com/";
+			expect(allowedOrigins().has("https://app.example.com")).toBe(true);
+
+			const res = await app.request("/health", {
+				headers: { Origin: "https://app.example.com" },
+			});
+			expect(res.headers.get("access-control-allow-origin")).toBe(
+				"https://app.example.com",
+			);
+		} finally {
+			env.FRONTEND_URL = originalFrontendUrl;
+		}
+	});
+
+	test("normalisation does not widen the allow-list", async () => {
+		const originalFrontendUrl = env.FRONTEND_URL;
+		try {
+			env.FRONTEND_URL = "https://app.example.com/";
+			// A suffix attack on the configured origin must not match.
+			expect(allowedOrigins().has("https://app.example.com.evil.test")).toBe(
+				false,
+			);
+
+			const res = await app.request("/health", {
+				headers: { Origin: "https://app.example.com.evil.test" },
+			});
+			expect(res.headers.get("access-control-allow-origin")).toBeNull();
+		} finally {
+			env.FRONTEND_URL = originalFrontendUrl;
+		}
 	});
 });
 
