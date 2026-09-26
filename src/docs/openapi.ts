@@ -251,6 +251,17 @@ function limitParam(): Record<string, unknown> {
 	};
 }
 
+/** The activity feed is capped lower than a general list: it is a headline. */
+function activityLimitParam(): Record<string, unknown> {
+	return {
+		name: "limit",
+		in: "query",
+		required: false,
+		schema: { type: "integer", minimum: 1, maximum: 50, default: 10 },
+		description: "Number of activity entries to return (max 50)",
+	};
+}
+
 export const openApiDocument = {
 	openapi: "3.1.0",
 	info: {
@@ -537,6 +548,44 @@ export const openApiDocument = {
 				parameters: [projectIdParam("Project id")],
 				responses: {
 					"204": { description: "Project soft-deleted, no content" },
+					...shareableErrorResponses(),
+				},
+			},
+		},
+		"/projects/{projectId}/metrics": {
+			get: {
+				tags: ["Projects"],
+				summary: "Get project task metrics",
+				description:
+					"Requires a Bearer JWT and project visibility (PM, INTERNAL). Every count is a database aggregate, so the dashboard never derives a total in the browser. `blocked` is derived from the dependency graph rather than the stored BLOCKED status, because a task whose prerequisite is unfinished has not had its status rewritten. Progress is the share of completed tasks, computed by the server. Not available to a client guest, who reads the scoped `/client` payloads instead.",
+				operationId: "getProjectMetrics",
+				security: bearerSecurity,
+				parameters: [projectIdParam("Project id")],
+				responses: {
+					"200": success({
+						type: "object",
+						properties: { metrics: ref("ProjectMetrics") },
+						required: ["metrics"],
+					}),
+					...shareableErrorResponses(),
+				},
+			},
+		},
+		"/projects/{projectId}/activity": {
+			get: {
+				tags: ["Projects"],
+				summary: "List recent project activity",
+				description:
+					"Requires a Bearer JWT and project visibility (PM, INTERNAL). Returns the project's newest audit entries, newest first, each resolved to its task title. Scoped to the tasks of this project, so a feed can never surface a change from a project the caller cannot open. Not available to a client guest: the entries name internal actors and record internal field values.",
+				operationId: "getProjectActivity",
+				security: bearerSecurity,
+				parameters: [
+					projectIdParam("Project id"),
+					pageParam(),
+					activityLimitParam(),
+				],
+				responses: {
+					"200": success(ref("ProjectActivityList")),
 					...shareableErrorResponses(),
 				},
 			},
@@ -1501,6 +1550,68 @@ export const openApiDocument = {
 					pagination: ref("Pagination"),
 				},
 				required: ["attachments", "pagination"],
+			},
+			ProjectTaskMetrics: {
+				type: "object",
+				description:
+					"Task counts for one project, produced by database aggregates. `blocked` comes from the dependency graph, not the stored BLOCKED status.",
+				properties: {
+					total: { type: "integer" },
+					completed: { type: "integer" },
+					inProgress: { type: "integer" },
+					todo: { type: "integer" },
+					blocked: { type: "integer" },
+				},
+				required: ["total", "completed", "inProgress", "todo", "blocked"],
+			},
+			ProjectMetrics: {
+				type: "object",
+				properties: {
+					projectId: uuidSchema("Project id"),
+					progress: {
+						type: "object",
+						properties: { percentage: { type: "integer" } },
+						required: ["percentage"],
+						description:
+							"Share of completed tasks as a whole percentage, computed by the server so the client never introduces its own progress rule.",
+					},
+					tasks: ref("ProjectTaskMetrics"),
+				},
+				required: ["projectId", "progress", "tasks"],
+			},
+			ProjectActivityEntry: {
+				type: "object",
+				properties: {
+					id: uuidSchema("Audit log id"),
+					taskId: uuidSchema("Task id"),
+					taskTitle: { type: "string" },
+					userId: uuidSchema("Acting user id"),
+					changedColumn: ref("ChangedColumn"),
+					oldValue: { type: "string", nullable: true },
+					newValue: { type: "string", nullable: true },
+					createdAt: { type: "string", format: "date-time" },
+				},
+				required: [
+					"id",
+					"taskId",
+					"taskTitle",
+					"userId",
+					"changedColumn",
+					"oldValue",
+					"newValue",
+					"createdAt",
+				],
+			},
+			ProjectActivityList: {
+				type: "object",
+				properties: {
+					activity: {
+						type: "array",
+						items: ref("ProjectActivityEntry"),
+					},
+					pagination: ref("Pagination"),
+				},
+				required: ["activity", "pagination"],
 			},
 			AuditLog: {
 				type: "object",

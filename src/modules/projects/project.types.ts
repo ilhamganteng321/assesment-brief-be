@@ -54,3 +54,50 @@ export type ProjectListResponse = {
 	projects: ProjectResponse[];
 	pagination: Pagination;
 };
+
+/**
+ * Task counts for one project, as the database counts them.
+ *
+ * `blocked` is derived from the dependency graph rather than the persisted
+ * `BLOCKED` status, because a task whose prerequisite is unfinished has not had
+ * its status rewritten to BLOCKED and would otherwise be missed.
+ */
+export type ProjectTaskMetrics = {
+	total: number;
+	completed: number;
+	inProgress: number;
+	todo: number;
+	blocked: number;
+};
+
+export type ProjectProgress = {
+	percentage: number;
+};
+
+/**
+ * The aggregate view a project dashboard needs. Every number is produced by the
+ * server so the client never has to invent a business rule for progress, and the
+ * whole payload is withheld from a client guest, who reads `/client/*` instead.
+ */
+export type ProjectMetricsResponse = {
+	projectId: string;
+	progress: ProjectProgress;
+	tasks: ProjectTaskMetrics;
+};
+
+/** One recent change, projected for a project-level activity feed. */
+export type ProjectActivityEntry = {
+	id: string;
+	taskId: string;
+	taskTitle: string;
+	userId: string;
+	changedColumn: string;
+	oldValue: string | null;
+	newValue: string | null;
+	createdAt: string;
+};
+
+export type ProjectActivityResponse = {
+	activity: ProjectActivityEntry[];
+	pagination: Pagination;
+};

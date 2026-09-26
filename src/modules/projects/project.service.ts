@@ -4,8 +4,10 @@ import { db } from "../../prisma/db";
 import { nowTimestamp, toTimestamp, toVarchar } from "../../prisma/scalars";
 import type {
 	ProjectAuthorizationContext,
+	TaskStatus,
 	UserContext,
 } from "../authorization/authorization.types";
+import { computeTaskBlockingStates } from "../dependencies/dependency.service";
 import { toProjectResponse } from "./project.dto";
 import {
 	ProjectAccessDeniedError,
@@ -26,17 +28,21 @@ import {
 import {
 	createProjectSchema,
 	DEFAULT_PROJECT_LIST_QUERY,
+	type ProjectActivityQuery,
 	type ProjectListQuery,
 	updateProjectSchema,
 } from "./project.schema";
 import type {
 	Pagination,
+	ProjectActivityResponse,
 	ProjectListResponse,
 	ProjectMemberRecord,
 	ProjectMemberResponse,
 	ProjectMemberWithUser,
+	ProjectMetricsResponse,
 	ProjectRecord,
 	ProjectResponse,
+	ProjectTaskMetrics,
 } from "./project.types";
 
 type UserRow = Omit<
@@ -461,4 +467,183 @@ export async function removeProjectMember(
 	await db.orm.public.ProjectMembers.where((row) =>
 		row.id.eq(member.id),
 	).delete();
+}
+
+/**
+ * Resolves a project the caller is allowed to read, or throws.
+ *
+ * The same visibility rule that guards the detail route guards the aggregates, so
+ * a member of one project can never read another's numbers.
+ */
+async function requireReadableProject(
+	user: UserContext,
+	projectId: string,
+): Promise<ProjectRecord> {
+	assertInternalApiAccess(user);
+	const project = await findVisibleProject(projectId);
+	if (!project) {
+		throw new ProjectNotFoundError();
+	}
+
+	const memberships = await loadMemberships(project.id);
+	assertCanView(user, project, memberships);
+
+	return project;
+}
+
+/**
+ * Counts the project's live tasks by status.
+ *
+ * Every count is a database aggregate, so the dashboard never counts a page of
+ * rows in the browser. Soft-deleted tasks are excluded, matching every other
+ * read path.
+ */
+async function countProjectTasks(
+	projectId: string,
+): Promise<ProjectTaskMetrics> {
+	async function countByStatus(status?: TaskStatus): Promise<number> {
+		let collection = db.orm.public.Tasks.where((task) =>
+			task.projectId.eq(projectId),
+		).where((task) => task.deletedAt.isNull());
+		if (status !== undefined) {
+			collection = collection.where((task) => task.status.eq(status));
+		}
+		const result = await collection.aggregate((aggregate) => ({
+			total: aggregate.count(),
+		}));
+		return result.total;
+	}
+
+	const [total, completed, inProgress, todo] = await Promise.all([
+		countByStatus(),
+		countByStatus("DONE"),
+		countByStatus("IN_PROGRESS"),
+		countByStatus("TODO"),
+	]);
+
+	return {
+		total,
+		completed,
+		inProgress,
+		todo,
+		blocked: await countBlockedProjectTasks(projectId),
+	};
+
+	/**
+	 * A task is blocked when a prerequisite is unfinished, which is a property of
+	 * the dependency graph rather than of the stored status: the status is only
+	 * rewritten to BLOCKED in some paths, so counting that column would report
+	 * zero for work that genuinely cannot start. The same graph function the task
+	 * list and the client dashboard use decides this.
+	 */
+	async function countBlockedProjectTasks(id: string): Promise<number> {
+		const taskIds = await db.orm.public.Tasks.where((task) =>
+			task.projectId.eq(id),
+		)
+			.where((task) => task.deletedAt.isNull())
+			.select("id")
+			.all();
+		if (taskIds.length === 0) {
+			return 0;
+		}
+		const states = await computeTaskBlockingStates(
+			id,
+			taskIds.map((task) => task.id),
+		);
+		return [...states.values()].filter((state) => state.blocked).length;
+	}
+}
+
+/**
+ * Project progress as a percentage of completed tasks.
+ *
+ * The formula is the one the client dashboard already uses, kept in one place so
+ * both surfaces cannot drift apart. Computing it here rather than in the browser
+ * is deliberate: progress is a business metric, and the server owns it.
+ */
+function computeProjectProgressPercentage(
+	metrics: Pick<ProjectTaskMetrics, "completed" | "total">,
+): number {
+	if (metrics.total === 0) {
+		return 0;
+	}
+	return Math.round((metrics.completed / metrics.total) * 100);
+}
+
+export async function getProjectMetrics(
+	user: UserContext,
+	projectId: string,
+): Promise<ProjectMetricsResponse> {
+	const project = await requireReadableProject(user, projectId);
+	const tasks = await countProjectTasks(project.id);
+
+	return {
+		projectId: project.id,
+		progress: { percentage: computeProjectProgressPercentage(tasks) },
+		tasks,
+	};
+}
+
+/**
+ * The project's most recent audit entries, newest first.
+ *
+ * Scoped to the tasks of one project and gated on the same project visibility
+ * rule, so an activity feed can never surface a change from a project the caller
+ * cannot open. The client guest has no equivalent: internal actors and internal
+ * field values are not theirs to read.
+ */
+export async function getProjectActivity(
+	user: UserContext,
+	projectId: string,
+	query: ProjectActivityQuery,
+): Promise<ProjectActivityResponse> {
+	const project = await requireReadableProject(user, projectId);
+
+	const taskIds = await db.orm.public.Tasks.where((task) =>
+		task.projectId.eq(project.id),
+	)
+		.select("id")
+		.all();
+	const ids = taskIds.map((task) => task.id);
+
+	if (ids.length === 0) {
+		return {
+			activity: [],
+			pagination: toPagination(query.page, query.limit, 0),
+		};
+	}
+
+	const countResult = await db.orm.public.AuditLogs.where((row) =>
+		row.taskId.in(ids),
+	).aggregate((aggregate) => ({ total: aggregate.count() }));
+
+	const records = await db.orm.public.AuditLogs.where((row) =>
+		row.taskId.in(ids),
+	)
+		.orderBy((row) => row.createdAt.desc())
+		.orderBy((row) => row.id.desc())
+		.limit(query.limit)
+		.offset((query.page - 1) * query.limit)
+		.all();
+
+	// Titles are resolved in one query instead of per row, so a page of activity
+	// costs two queries rather than one plus the page size.
+	const titleRows = await db.orm.public.Tasks.where((task) => task.id.in(ids))
+		.select("id", "title")
+		.all();
+	const titles = new Map(titleRows.map((task) => [task.id, task.title]));
+
+	return {
+		activity: records.map((row) => ({
+			id: row.id,
+			taskId: row.taskId,
+			taskTitle: titles.get(row.taskId) ?? "Deleted task",
+			userId: row.userId,
+			changedColumn: String(row.changedColumn),
+			oldValue: row.oldValue,
+			newValue: row.newValue,
+			createdAt: String(row.createdAt),
+		})),
+		pagination: toPagination(query.page, query.limit, countResult.total),
+	};
 }

@@ -9,6 +9,7 @@ import { authRequired } from "../../middleware/auth";
 import type { RequestIdVariables } from "../../middleware/request-id";
 import {
 	addProjectMemberSchema,
+	projectActivityQuerySchema,
 	projectIdParamsSchema,
 	projectListQuerySchema,
 	projectMemberParamsSchema,
@@ -17,8 +18,10 @@ import {
 	addProjectMember,
 	createProject,
 	deleteProject,
+	getProjectActivity,
 	getProjectById,
 	getProjectMembers,
+	getProjectMetrics,
 	listProjects,
 	removeProjectMember,
 	updateProject,
@@ -91,6 +94,19 @@ projectRoutes.delete("/:projectId", async (c) => {
 	const { projectId } = projectIdParamsSchema.parse(c.req.param());
 	await deleteProject(c.get("user"), projectId);
 	return c.body(null, 204);
+});
+
+projectRoutes.get("/:projectId/metrics", async (c) => {
+	const { projectId } = projectIdParamsSchema.parse(c.req.param());
+	const metrics = await getProjectMetrics(c.get("user"), projectId);
+	return c.json(successResponse({ metrics }));
+});
+
+projectRoutes.get("/:projectId/activity", async (c) => {
+	const { projectId } = projectIdParamsSchema.parse(c.req.param());
+	const query = projectActivityQuerySchema.parse(c.req.query());
+	const activity = await getProjectActivity(c.get("user"), projectId, query);
+	return c.json(successResponse(activity));
 });
 
 projectRoutes.get("/:projectId/members", async (c) => {

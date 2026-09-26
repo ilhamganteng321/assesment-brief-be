@@ -2788,6 +2788,452 @@ async function verifyAuditTrail(
 	);
 }
 
+/**
+ * Prompt 21 - project dashboard aggregates.
+ *
+ * The dashboard needs project-level numbers, and the internal project contract
+ * did not expose any, so this covers the two endpoints added for it: `/metrics`
+ * and `/activity`. The important part is the last block, which reads the client
+ * guest's actual response bodies and asserts that no internal field is present,
+ * rather than trusting that the UI simply does not render it.
+ */
+async function verifyProjectDashboard(
+	tokenPm: string,
+	tokenEngineer: string,
+	tokenClient: string,
+	engineerUserId: string,
+	projectId: string,
+): Promise<void> {
+	const metricsPath = `/projects/${projectId}/metrics`;
+	const activityPath = `/projects/${projectId}/activity`;
+
+	/** A task update, used to give the sibling project some activity of its own. */
+	const patch = (
+		token: string,
+		taskId: string,
+		body: Record<string, unknown>,
+	): Promise<ApiResult> =>
+		api(`/tasks/${taskId}`, { method: "PATCH", token, body });
+
+	// --- metrics are authorized aggregates ----------------------------------
+	const pmMetrics = await api(metricsPath, { token: tokenPm });
+	const pmPayload = jsonPath<Record<string, unknown>>(pmMetrics, [
+		"data",
+		"metrics",
+	]);
+	const counts = (pmPayload?.["tasks"] ?? {}) as Record<
+		string,
+		number | undefined
+	>;
+	const progress = (pmPayload?.["progress"] ?? {}) as { percentage?: number };
+	const countOf = (key: string): number => counts[key] ?? 0;
+	record(
+		"dashboard: a PM can read the project metrics",
+		pmMetrics.status === 200 && pmPayload?.["projectId"] === projectId,
+		`status=${pmMetrics.status} payload=${JSON.stringify(pmPayload ?? null)}`,
+	);
+	record(
+		"dashboard: the metrics carry every count the dashboard renders",
+		["total", "completed", "inProgress", "todo", "blocked"].every(
+			(key) => typeof counts[key] === "number" && (counts[key] ?? -1) >= 0,
+		),
+		`tasks=${JSON.stringify(counts)}`,
+	);
+	record(
+		"dashboard: progress is a server-computed whole percentage",
+		typeof progress.percentage === "number" &&
+			progress.percentage >= 0 &&
+			progress.percentage <= 100 &&
+			progress.percentage ===
+				(countOf("total") === 0
+					? 0
+					: Math.round((countOf("completed") / countOf("total")) * 100)),
+		`percentage=${String(progress.percentage)} completed=${String(
+			countOf("completed"),
+		)}/${String(countOf("total"))}`,
+	);
+
+	// The counts have to agree with what the task list itself reports, otherwise
+	// the dashboard and the board would contradict each other.
+	const listTotal = await api("/tasks", {
+		token: tokenPm,
+	});
+	const listTotalCount =
+		jsonPath<number>(listTotal, ["data", "pagination", "total"]) ?? -1;
+	const scoped = await api(`/tasks?filters=${JSON.stringify({ projectId })}`, {
+		token: tokenPm,
+	});
+	const scopedTotal =
+		jsonPath<number>(scoped, ["data", "pagination", "total"]) ?? -1;
+	record(
+		"dashboard: the project total matches the filtered task list",
+		scopedTotal === countOf("total"),
+		`metrics=${String(countOf("total"))} list=${scopedTotal}`,
+	);
+	record(
+		"dashboard: the harness project has tasks to measure",
+		listTotalCount > 0 && countOf("total") > 0,
+		`all=${listTotalCount} project=${String(countOf("total"))}`,
+	);
+
+	// A real transition has to move the numbers, otherwise the dashboard is
+	// serving a snapshot that never refreshes.
+	const beforeDone = countOf("completed");
+	const doneTask = await createTaskFor(
+		tokenPm,
+		projectId,
+		"Dashboard done task",
+		{
+			status: "DONE",
+		},
+	);
+	if (idOf(doneTask).length === 0) {
+		fail("dashboard: completed-task fixture could not be created");
+		return;
+	}
+	const afterCreate = await api(metricsPath, { token: tokenPm });
+	const afterCreateCounts = (jsonPath<Record<string, number>>(afterCreate, [
+		"data",
+		"metrics",
+		"tasks",
+	]) ?? {}) as Record<string, number | undefined>;
+	record(
+		"dashboard: creating a task updates the metrics",
+		(afterCreateCounts["total"] ?? -1) === countOf("total") + 1 &&
+			(afterCreateCounts["completed"] ?? -1) === beforeDone + 1,
+		`before=${JSON.stringify(counts)} after=${JSON.stringify(
+			afterCreateCounts,
+		)}`,
+	);
+
+	// --- activity is the project's own audit history ------------------------
+	const activity = await api(activityPath, { token: tokenPm });
+	const entries = jsonPath<Record<string, unknown>[]>(activity, [
+		"data",
+		"activity",
+	]);
+	record(
+		"dashboard: a PM can read recent project activity",
+		activity.status === 200 && Array.isArray(entries) && entries.length > 0,
+		`status=${activity.status} count=${Array.isArray(entries) ? entries.length : -1}`,
+	);
+	record(
+		"dashboard: every activity entry names its task and its actor",
+		Array.isArray(entries) &&
+			entries.every(
+				(entry) =>
+					typeof entry["taskTitle"] === "string" &&
+					entry["taskTitle"].length > 0 &&
+					typeof entry["userId"] === "string" &&
+					typeof entry["changedColumn"] === "string" &&
+					typeof entry["createdAt"] === "string",
+			),
+		`first=${JSON.stringify(entries?.[0] ?? null)}`,
+	);
+	const stamps = (entries ?? []).map((entry) =>
+		new Date(String(entry["createdAt"])).getTime(),
+	);
+	record(
+		"dashboard: activity is ordered newest first",
+		stamps.every(
+			(value, index) => index === 0 || (stamps[index - 1] ?? 0) >= value,
+		),
+		`stamps=${JSON.stringify(stamps)}`,
+	);
+
+	// Activity must be scoped to this project, not the whole audit log. A real
+	// second project is required, because a missing one would only 404.
+	const ownTaskIds = new Set(
+		(jsonPath<{ id: string }[]>(scoped, ["data", "tasks"]) ?? []).map(
+			(task) => task.id,
+		),
+	);
+	const siblingProject = await api("/projects", {
+		method: "POST",
+		token: tokenPm,
+		body: {
+			name: `Dashboard Sibling ${RUN_ID}`,
+			description: "A second project, used to prove activity stays scoped.",
+		},
+	});
+	const siblingId =
+		jsonPath<string>(siblingProject, ["data", "project", "id"]) ?? "";
+	if (siblingId.length > 0) {
+		ownedProjectIds.push(siblingId);
+		const siblingTask = await createTaskFor(
+			tokenPm,
+			siblingId,
+			"Sibling task",
+			{ description: "before" },
+		);
+		const siblingTaskId = idOf(siblingTask);
+		if (siblingTaskId.length > 0) {
+			await patch(tokenPm, siblingTaskId, {
+				description: "after",
+				version: 1,
+			});
+		}
+	}
+	const siblingActivity = await api(
+		`/projects/${siblingId}/activity?page=1&limit=50`,
+		{ token: tokenPm },
+	);
+	const siblingEntries = (jsonPath<Record<string, unknown>[]>(siblingActivity, [
+		"data",
+		"activity",
+	]) ?? []) as Record<string, unknown>[];
+	record(
+		"dashboard: a project's activity feed carries no other project's tasks",
+		siblingId.length > 0 &&
+			siblingActivity.status === 200 &&
+			siblingEntries.length > 0 &&
+			siblingEntries.every((entry) => !ownTaskIds.has(String(entry["taskId"]))),
+		`status=${siblingActivity.status} count=${siblingEntries.length} foreign=${
+			siblingEntries.filter((entry) => ownTaskIds.has(String(entry["taskId"])))
+				.length
+		}`,
+	);
+
+	const pagedActivity = await api(`${activityPath}?page=1&limit=1`, {
+		token: tokenPm,
+	});
+	record(
+		"dashboard: the activity feed honours its pagination envelope",
+		pagedActivity.status === 200 &&
+			jsonPath<number>(pagedActivity, ["data", "pagination", "limit"]) === 1 &&
+			(Array.isArray(entries) ? entries.length : 0) > 1,
+		`status=${pagedActivity.status} pagination=${JSON.stringify(
+			jsonPath(pagedActivity, ["data", "pagination"]) ?? null,
+		)}`,
+	);
+	const badActivity = await api(`${activityPath}?limit=999`, {
+		token: tokenPm,
+	});
+	record(
+		"dashboard: the activity feed rejects an oversized page",
+		badActivity.status === 400,
+		`status=${badActivity.status}`,
+	);
+
+	// --- authorization -------------------------------------------------------
+	// A real non-member is required: an internal user who belongs to the project
+	// would be allowed, so reusing one here would prove nothing.
+	const outsiderAccount = await registerInternal({
+		name: "It Dashboard Outsider",
+		email: itEmail("dashOut"),
+		department: "UI_UX",
+	});
+	const engineerMetrics = await api(metricsPath, { token: tokenEngineer });
+	const engineerActivity = await api(activityPath, { token: tokenEngineer });
+	const outsiderMetrics = await api(metricsPath, {
+		token: outsiderAccount.token,
+	});
+	const outsiderActivity = await api(activityPath, {
+		token: outsiderAccount.token,
+	});
+	record(
+		"dashboard: an internal project member can read the dashboard",
+		engineerMetrics.status === 200 && engineerActivity.status === 200,
+		`metrics=${engineerMetrics.status} activity=${engineerActivity.status}`,
+	);
+	record(
+		"dashboard: a non-member is denied the metrics",
+		outsiderMetrics.status === 403,
+		`status=${outsiderMetrics.status} code=${String(
+			jsonPath(outsiderMetrics, ["error", "code"]),
+		)}`,
+	);
+	record(
+		"dashboard: a non-member is denied the activity feed",
+		outsiderActivity.status === 403,
+		`status=${outsiderActivity.status} code=${String(
+			jsonPath(outsiderActivity, ["error", "code"]),
+		)}`,
+	);
+	record(
+		"dashboard: an unknown project is a 404",
+		(
+			await api("/projects/44444444-4444-4444-8444-444444444444/metrics", {
+				token: tokenPm,
+			})
+		).status === 404,
+		"",
+	);
+	record(
+		"dashboard: an unauthenticated read is rejected",
+		(await api(metricsPath)).status === 401,
+		"",
+	);
+
+	// --- the client guest is refused the internal surfaces entirely ---------
+	const clientMetrics = await api(metricsPath, { token: tokenClient });
+	const clientActivity = await api(activityPath, { token: tokenClient });
+	record(
+		"dashboard: a client guest cannot read the internal metrics",
+		clientMetrics.status === 403,
+		`status=${clientMetrics.status} code=${String(
+			jsonPath(clientMetrics, ["error", "code"]),
+		)}`,
+	);
+	record(
+		"dashboard: a client guest cannot read the internal activity feed",
+		clientActivity.status === 403,
+		`status=${clientActivity.status} code=${String(
+			jsonPath(clientActivity, ["error", "code"]),
+		)}`,
+	);
+
+	// --- spec section 32: audit the client payload itself --------------------
+	// The UI hiding a field proves nothing. These read the raw response bodies a
+	// client guest receives and assert the internal columns are absent from the
+	// bytes, not merely unrendered.
+	//
+	// The assignee has to be a member of the project, so the engineer who already
+	// belongs to it is used; a non-member would be rejected and the fixture would
+	// silently produce empty ids.
+	const assigneeId = engineerUserId;
+	const internalUserIds = (
+		await db.orm.public.Users.where((user) => user.role.in(["PM", "INTERNAL"]))
+			.select("id")
+			.all()
+	).map((user) => user.id);
+	const internalNames = (
+		await db.orm.public.Users.where((user) => user.role.in(["PM", "INTERNAL"]))
+			.select("name")
+			.all()
+	).map((user) => String(user.name));
+
+	const clientVisible = await createTaskFor(
+		tokenPm,
+		projectId,
+		"Client visible for audit",
+		{ assignedToId: assigneeId, clientVisible: true },
+	);
+	const internalOnly = await createTaskFor(
+		tokenPm,
+		projectId,
+		"Internal only for audit",
+		{ assignedToId: assigneeId, clientVisible: false },
+	);
+	const clientVisibleId = idOf(clientVisible);
+	const internalOnlyId = idOf(internalOnly);
+	if (clientVisibleId.length === 0 || internalOnlyId.length === 0) {
+		fail(
+			"client isolation: the client-visibility fixtures could not be created",
+			`visible=${clientVisible.status}/${clientVisible.code} internal=${internalOnly.status}/${internalOnly.code}`,
+		);
+		return;
+	}
+
+	// The client dashboard is the only project-level payload a client guest gets,
+	// so it is audited alongside the task payloads.
+	const clientDashboard = await api("/client/dashboard", {
+		token: tokenClient,
+	});
+	const clientDashboardBody = JSON.stringify(clientDashboard.json ?? {});
+	const clientTaskList = await api(
+		`/client/projects/${projectId}/tasks?page=1&limit=100`,
+		{ token: tokenClient },
+	);
+	const clientTaskDetail = await api(
+		`/client/projects/${projectId}/tasks/${clientVisibleId}`,
+		{ token: tokenClient },
+	);
+	const clientListBody = JSON.stringify(clientTaskList.json ?? {});
+	const clientDetailBody = JSON.stringify(clientTaskDetail.json ?? {});
+
+	const forbiddenKeys = [
+		"assignedToId",
+		"department",
+		"priority",
+		"isBlocked",
+		"blockedBy",
+		"version",
+		"userId",
+		"auditLogs",
+		"uploadedBy",
+	];
+	const leakedKey = [...forbiddenKeys].find(
+		(key) =>
+			clientDashboardBody.includes(`"${key}"`) ||
+			clientListBody.includes(`"${key}"`) ||
+			clientDetailBody.includes(`"${key}"`),
+	);
+	record(
+		"client isolation: no internal column appears in any client payload",
+		leakedKey === undefined,
+		`leaked=${String(leakedKey)}`,
+	);
+
+	const leakedUserId = internalUserIds.find(
+		(id) => clientListBody.includes(id) || clientDetailBody.includes(id),
+	);
+	record(
+		"client isolation: no internal user id appears in a client task payload",
+		leakedUserId === undefined,
+		`leaked=${String(leakedUserId ?? null)}`,
+	);
+	const leakedName = internalNames.find(
+		(name) => clientListBody.includes(name) || clientDetailBody.includes(name),
+	);
+	record(
+		"client isolation: no internal user name appears in a client task payload",
+		leakedName === undefined,
+		`leaked=${String(leakedName ?? null)}`,
+	);
+	record(
+		"client isolation: a non-client-visible task is absent from the client list",
+		clientTaskList.status === 200 &&
+			!clientListBody.includes(internalOnlyId) &&
+			!clientListBody.includes("Internal only for audit"),
+		`status=${clientTaskList.status}`,
+	);
+	record(
+		"client isolation: a non-client-visible task is a 404 for the client",
+		(
+			await api(`/client/projects/${projectId}/tasks/${internalOnlyId}`, {
+				token: tokenClient,
+			})
+		).status === 404,
+		"",
+	);
+	record(
+		"client isolation: the client task payload exposes only the allowed keys",
+		clientTaskDetail.status === 200 &&
+			Object.keys(
+				jsonPath<Record<string, unknown>>(clientTaskDetail, ["data", "task"]) ??
+					{},
+			)
+				.sort()
+				.join(",") === "clientVisible,description,id,status,title",
+		`keys=${Object.keys(
+			jsonPath<Record<string, unknown>>(clientTaskDetail, ["data", "task"]) ??
+				{},
+		)
+			.sort()
+			.join(",")}`,
+	);
+	record(
+		"client isolation: the client project payload exposes only progress",
+		clientDashboard.status === 200 &&
+			(() => {
+				const entries = (
+					(jsonPath<Record<string, unknown>[]>(clientDashboard, [
+						"data",
+						"projects",
+					]) ?? []) as Record<string, unknown>[]
+				).filter((project) => project["id"] === projectId);
+				return (
+					entries.length === 1 &&
+					Object.keys(entries[0] ?? {})
+						.sort()
+						.join(",") === "id,name,progress,tasks"
+				);
+			})(),
+		`status=${clientDashboard.status} body=${clientDashboardBody.slice(0, 240)}`,
+	);
+}
+
 async function verifyFlatTaskApi(
 	tokenPm: string,
 	tokenInternal: string,
@@ -3168,6 +3614,13 @@ async function main(): Promise<void> {
 			fixture.depProjectId,
 		);
 		await verifyAuditTrail(
+			fixture.tokenPm,
+			backend.token,
+			fixture.tokenClient,
+			backend.userId,
+			fixture.projectId,
+		);
+		await verifyProjectDashboard(
 			fixture.tokenPm,
 			backend.token,
 			fixture.tokenClient,

@@ -136,3 +136,23 @@ export const addProjectMemberSchema = z.strictObject({
 });
 
 export type AddProjectMemberInput = z.infer<typeof addProjectMemberSchema>;
+
+/**
+ * Paging for the project activity feed. The cap keeps one request from pulling an
+ * unbounded slice of the audit log.
+ */
+export const projectActivityQuerySchema = z.strictObject({
+	page: z.coerce
+		.number()
+		.int("page must be an integer")
+		.min(1, "page must be at least 1")
+		.default(1),
+	limit: z.coerce
+		.number()
+		.int("limit must be an integer")
+		.min(1, "limit must be at least 1")
+		.max(50, "limit must be at most 50")
+		.default(10),
+});
+
+export type ProjectActivityQuery = z.infer<typeof projectActivityQuerySchema>;
