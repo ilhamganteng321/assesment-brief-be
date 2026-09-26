@@ -55,3 +55,23 @@ export class AttachmentStorageError extends HttpError {
 		super(500, "ATTACHMENT_STORAGE_ERROR", message);
 	}
 }
+
+/**
+ * The row is there but the bytes behind it are not.
+ *
+ * Not a server fault, so deliberately not a 500: the local storage provider is
+ * the only implementation, and its directory does not survive a redeploy on a
+ * platform with an ephemeral filesystem, which leaves attachment rows pointing
+ * at files that no longer exist. Reporting that as `ATTACHMENT_STORAGE_ERROR`
+ * would read as "the API is broken" and send a reviewer looking at the wrong
+ * layer, and it would page whoever is on call for a deployment artefact.
+ */
+export class AttachmentContentMissingError extends HttpError {
+	constructor() {
+		super(
+			404,
+			"ATTACHMENT_CONTENT_MISSING",
+			"The stored file for this attachment is no longer available",
+		);
+	}
+}

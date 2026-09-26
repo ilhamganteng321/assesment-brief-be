@@ -12,6 +12,7 @@ import { TaskNotFoundError } from "../tasks/task.errors";
 import {
 	AttachmentAccessDeniedError,
 	AttachmentAlreadyDeletedError,
+	AttachmentContentMissingError,
 	AttachmentFileMissingError,
 	AttachmentFileTooLargeError,
 	AttachmentInvalidFileNameError,
@@ -300,7 +301,7 @@ export function createAttachmentService(
 
 		const bytes = await storage.get(attachment.storageKey);
 		if (bytes === null) {
-			throw new AttachmentStorageError("The stored file is missing");
+			throw new AttachmentContentMissingError();
 		}
 
 		const uploaderName =
