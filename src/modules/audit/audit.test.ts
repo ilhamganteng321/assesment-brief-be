@@ -39,6 +39,8 @@ function snapshot(
 		description: null,
 		assignedToId: null,
 		status: "TODO",
+		priority: "MEDIUM",
+		department: "PRODUCT",
 		clientVisible: false,
 		deletedAt: null,
 		...overrides,
@@ -46,15 +48,27 @@ function snapshot(
 }
 
 describe("audit schema", () => {
-	test("enumerates exactly the six auditable columns", () => {
+	test("enumerates exactly the auditable columns", () => {
 		expect(AUDITABLE_COLUMNS).toEqual([
 			"title",
 			"description",
 			"assignedToId",
 			"status",
+			"priority",
+			"department",
 			"clientVisible",
 			"deletedAt",
 		]);
+	});
+
+	test("excludes purely technical columns from the audit trail", () => {
+		// `version` and `updatedAt` move on every successful write, so recording
+		// them would bury the real history; neither is a user-facing action.
+		expect(AUDITABLE_COLUMNS).not.toContain("version");
+		expect(AUDITABLE_COLUMNS).not.toContain("updatedAt");
+		expect(AUDITABLE_COLUMNS).not.toContain("createdAt");
+		expect(AUDITABLE_COLUMNS).not.toContain("id");
+		expect(AUDITABLE_COLUMNS).not.toContain("projectId");
 	});
 
 	test("list query applies defaults", () => {
@@ -150,6 +164,8 @@ describe("buildAuditEntries", () => {
 				title: "Build admin panel",
 				description: "Create the API",
 				status: "IN_PROGRESS",
+				priority: "URGENT",
+				department: "BACKEND",
 				clientVisible: true,
 			}),
 		});
@@ -158,11 +174,88 @@ describe("buildAuditEntries", () => {
 			"title",
 			"description",
 			"status",
+			"priority",
+			"department",
 			"clientVisible",
 		]);
 		expect(
 			entries.some((entry) => (entry.changedColumn as string) === "version"),
 		).toBe(false);
+	});
+
+	test("gives every field its own record with its own old and new value", () => {
+		const entries = buildAuditEntries({
+			taskId: TASK_ID,
+			userId: USER_ID,
+			before: snapshot(),
+			after: snapshot({
+				title: "Build admin panel",
+				description: "Create the API",
+				priority: "HIGH",
+			}),
+		});
+
+		expect(entries).toEqual([
+			{
+				taskId: TASK_ID,
+				userId: USER_ID,
+				changedColumn: "title",
+				oldValue: "Build dashboard",
+				newValue: "Build admin panel",
+			},
+			{
+				taskId: TASK_ID,
+				userId: USER_ID,
+				changedColumn: "description",
+				oldValue: null,
+				newValue: "Create the API",
+			},
+			{
+				taskId: TASK_ID,
+				userId: USER_ID,
+				changedColumn: "priority",
+				oldValue: "MEDIUM",
+				newValue: "HIGH",
+			},
+		]);
+	});
+
+	test("records a priority change on its own", () => {
+		const entries = buildAuditEntries({
+			taskId: TASK_ID,
+			userId: USER_ID,
+			before: snapshot(),
+			after: snapshot({ priority: "LOW" }),
+		});
+
+		expect(entries).toEqual([
+			{
+				taskId: TASK_ID,
+				userId: USER_ID,
+				changedColumn: "priority",
+				oldValue: "MEDIUM",
+				newValue: "LOW",
+			},
+		]);
+	});
+
+	test("records a department change on its own", () => {
+		const entries = buildAuditEntries({
+			taskId: TASK_ID,
+			userId: USER_ID,
+			before: snapshot(),
+			after: snapshot({ department: "FRONTEND" }),
+		});
+
+		expect(entries).toEqual([
+			{
+				taskId: TASK_ID,
+				userId: USER_ID,
+				changedColumn: "department",
+				oldValue: "PRODUCT",
+				newValue: "FRONTEND",
+			},
+		]);
 	});
 
 	test("does not create entries for unchanged values", () => {

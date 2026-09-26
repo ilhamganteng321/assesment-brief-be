@@ -66,6 +66,12 @@ export function serializeAuditValue(
 	return value.toString();
 }
 
+/**
+ * Fixed evaluation order so one request that changes several fields always
+ * produces its audit records in the same sequence. It also keeps every field in
+ * its own record -- unrelated changes are never collapsed into a single
+ * `changedColumn`.
+ */
 const AUDIT_FIELD_ORDER: readonly {
 	readonly column: AuditableColumn;
 	readonly name: keyof TaskAuditSnapshot;
@@ -74,10 +80,18 @@ const AUDIT_FIELD_ORDER: readonly {
 	{ column: "description", name: "description" },
 	{ column: "assignedToId", name: "assignedToId" },
 	{ column: "status", name: "status" },
+	{ column: "priority", name: "priority" },
+	{ column: "department", name: "department" },
 	{ column: "clientVisible", name: "clientVisible" },
 	{ column: "deletedAt", name: "deletedAt" },
 ];
 
+/**
+ * Diff two snapshots of the same task row into one entry per field that actually
+ * moved. `before` is always read from the database inside the mutation's own
+ * transaction, never from the request body, so an old value can never be
+ * spoofed by a client.
+ */
 export function buildAuditEntries(input: {
 	taskId: string;
 	userId: string;
@@ -124,18 +138,12 @@ async function insertAuditLogs(
 	return records;
 }
 
-export async function createAuditLog(
-	table: AuditLogsTable,
-	entry: AuditLogEntry,
-): Promise<AuditLogRecord> {
-	const records = await insertAuditLogs(table, [entry], nowTimestamp());
-	const record = records[0];
-	if (!record) {
-		throw new Error("Audit log insert returned no record");
-	}
-	return record;
-}
-
+/**
+ * Append audit entries. The table handle is supplied by the caller so this runs
+ * on the mutation's own transaction: when the surrounding transaction rolls
+ * back, the audit rows roll back with it and the task change and its history can
+ * never diverge.
+ */
 export async function createAuditLogs(
 	table: AuditLogsTable,
 	entries: readonly AuditLogEntry[],

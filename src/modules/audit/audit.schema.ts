@@ -1,10 +1,19 @@
 import { z } from "zod";
 
+/**
+ * Columns whose changes are meaningful user actions and therefore get an audit
+ * record. Purely technical columns are deliberately excluded: `version` and
+ * `updatedAt` move on every successful write, so recording them would bury the
+ * real history in noise, and `version` in particular is a concurrency token
+ * rather than a business value.
+ */
 export const AUDITABLE_COLUMNS = [
 	"title",
 	"description",
 	"assignedToId",
 	"status",
+	"priority",
+	"department",
 	"clientVisible",
 	"deletedAt",
 ] as const;

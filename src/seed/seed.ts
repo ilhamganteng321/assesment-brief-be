@@ -113,6 +113,8 @@ function snapshotFor(input: {
 	readonly description: string;
 	readonly assignedToId: string;
 	readonly status: string;
+	readonly priority: string;
+	readonly department: string;
 	readonly clientVisible: boolean;
 }): TaskAuditSnapshot {
 	return {
@@ -120,6 +122,8 @@ function snapshotFor(input: {
 		description: input.description,
 		assignedToId: input.assignedToId,
 		status: input.status,
+		priority: input.priority,
+		department: input.department,
 		clientVisible: input.clientVisible,
 		deletedAt: null,
 	};
@@ -246,20 +250,18 @@ async function writeStatusAuditTrail(input: {
 	assignedToId: string;
 	clientVisible: boolean;
 }): Promise<number> {
-	const before = snapshotFor({
+	// The seeded rows leave `priority` and `department` at their column defaults,
+	// so the snapshot repeats them and only `status` actually differs.
+	const shared = {
 		title: input.title,
 		description: input.description,
 		assignedToId: input.assignedToId,
-		status: input.beforeStatus,
+		priority: "MEDIUM",
+		department: "PRODUCT",
 		clientVisible: input.clientVisible,
-	});
-	const after = snapshotFor({
-		title: input.title,
-		description: input.description,
-		assignedToId: input.assignedToId,
-		status: input.afterStatus,
-		clientVisible: input.clientVisible,
-	});
+	};
+	const before = snapshotFor({ ...shared, status: input.beforeStatus });
+	const after = snapshotFor({ ...shared, status: input.afterStatus });
 	const entries = buildAuditEntries({
 		taskId: input.taskId,
 		userId: input.userId,

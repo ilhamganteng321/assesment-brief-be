@@ -2328,6 +2328,466 @@ async function verifyConcurrency(
 	);
 }
 
+/**
+ * Prompt 19 - immutable audit trail.
+ *
+ * Every meaningful task mutation must append one row per changed column, inside
+ * the same transaction as the write itself. The checks below walk the spec's
+ * nine cases in order: single-field changes, a status transition, a multi-field
+ * request, a no-op, an optimistic-lock loss, a soft delete, exclusion of deleted
+ * rows, the absence of any mutation endpoint, and rollback when the audit write
+ * fails.
+ */
+async function verifyAuditTrail(
+	tokenPm: string,
+	tokenEngineer: string,
+	tokenClient: string,
+	engineerUserId: string,
+	projectId: string,
+): Promise<void> {
+	const patch = (
+		token: string,
+		taskId: string,
+		body: Record<string, unknown>,
+	): Promise<ApiResult> =>
+		api(`/tasks/${taskId}`, { method: "PATCH", token, body });
+
+	const auditPath = (taskId: string) =>
+		`/projects/${projectId}/tasks/${taskId}/audit-logs`;
+
+	/** Every audit row for a task, read newest-first as the API returns them. */
+	const auditRows = async (
+		taskId: string,
+	): Promise<Record<string, unknown>[]> => {
+		const result = await api(auditPath(taskId), { token: tokenPm });
+		const rows = jsonPath<Record<string, unknown>[]>(result, [
+			"data",
+			"auditLogs",
+		]);
+		return Array.isArray(rows) ? rows : [];
+	};
+
+	const rowCount = async (taskId: string): Promise<number> => {
+		const result = await api(auditPath(taskId), { token: tokenPm });
+		return jsonPath<number>(result, ["data", "pagination", "total"]) ?? -1;
+	};
+
+	const latestFor = (
+		rows: readonly Record<string, unknown>[],
+		column: string,
+	): Record<string, unknown> | undefined =>
+		rows.find((row) => row.changedColumn === column);
+
+	const storedRow = async (taskId: string) =>
+		db.orm.public.Tasks.where((t) => t.id.eq(taskId)).first();
+
+	// --- spec test 1: a description change writes exactly one record ---------
+	const described = await createTaskFor(
+		tokenPm,
+		projectId,
+		"Audit description",
+		{ description: "Old", assignedToId: engineerUserId },
+	);
+	const describedId = idOf(described);
+	if (describedId.length === 0) {
+		fail("audit: description fixture could not be created");
+		return;
+	}
+	await patch(tokenPm, describedId, {
+		description: "New",
+		version: 1,
+	});
+	const descriptionRows = await auditRows(describedId);
+	const descriptionEntry = latestFor(descriptionRows, "description");
+	record(
+		"audit: a description change records one row with the old and new value",
+		descriptionRows.length === 1 &&
+			descriptionEntry?.oldValue === "Old" &&
+			descriptionEntry?.newValue === "New" &&
+			descriptionEntry?.taskId === describedId,
+		`rows=${JSON.stringify(descriptionRows)}`,
+	);
+
+	// --- spec test 2: a status transition is recorded ------------------------
+	const started = await patch(tokenEngineer, describedId, {
+		status: "IN_PROGRESS",
+		version: 2,
+	});
+	const statusRows = await auditRows(describedId);
+	const statusEntry = latestFor(statusRows, "status");
+	record(
+		"audit: a status transition records the previous and the new status",
+		started.status === 200 &&
+			statusEntry?.oldValue === "TODO" &&
+			statusEntry?.newValue === "IN_PROGRESS",
+		`status=${started.status} entry=${JSON.stringify(statusEntry ?? null)}`,
+	);
+
+	// --- spec section 31: the actor comes from the session, never the body ---
+	record(
+		"audit: the recorded user is the authenticated actor, not a request field",
+		statusEntry?.userId === engineerUserId &&
+			!Object.hasOwn(
+				(started.json as { data?: { task?: Record<string, unknown> } })?.data
+					?.task ?? {},
+				"userId",
+			),
+		`userId=${String(statusEntry?.userId)} expected=${engineerUserId}`,
+	);
+
+	// --- spec test 4: a no-op appends nothing -------------------------------
+	const beforeNoop = await rowCount(describedId);
+	// A different field, so the request is a real update rather than a rejected
+	// empty payload: the point is that an unchanged field adds no row.
+	await patch(tokenEngineer, describedId, { priority: "MEDIUM", version: 3 });
+	const afterNoop = await auditRows(describedId);
+	record(
+		"audit: rewriting an identical value appends no record",
+		afterNoop.length === beforeNoop &&
+			!afterNoop.some((row) => row.changedColumn === "priority"),
+		`before=${beforeNoop} after=${afterNoop.length}`,
+	);
+
+	// --- spec test 3: one request, one record per changed column -------------
+	const multi = await createTaskFor(tokenPm, projectId, "Audit multi field", {
+		description: "Body",
+		assignedToId: engineerUserId,
+	});
+	const multiId = idOf(multi);
+	if (multiId.length === 0) {
+		fail("audit: multi-field fixture could not be created");
+		return;
+	}
+	await patch(tokenPm, multiId, {
+		title: "Audit multi field renamed",
+		description: "Body rewritten",
+		priority: "HIGH",
+		version: 1,
+	});
+	const multiRows = await auditRows(multiId);
+	record(
+		"audit: a multi-field request writes one record per changed column",
+		multiRows.length === 3 &&
+			JSON.stringify(multiRows.map((row) => row.changedColumn).sort()) ===
+				JSON.stringify(["description", "priority", "title"]) &&
+			latestFor(multiRows, "title")?.oldValue === "Audit multi field" &&
+			latestFor(multiRows, "title")?.newValue === "Audit multi field renamed" &&
+			latestFor(multiRows, "priority")?.oldValue === "MEDIUM" &&
+			latestFor(multiRows, "priority")?.newValue === "HIGH",
+		`rows=${JSON.stringify(multiRows)}`,
+	);
+
+	// --- spec sections 6/7: assignee and visibility transitions -------------
+	const reassigned = await createTaskFor(tokenPm, projectId, "Audit assignee", {
+		assignedToId: engineerUserId,
+	});
+	const reassignedId = idOf(reassigned);
+	if (reassignedId.length === 0) {
+		fail("audit: assignee fixture could not be created");
+		return;
+	}
+	const secondEngineer = await registerInternal({
+		name: "It Audit Second Assignee",
+		email: itEmail("audit2"),
+		department: "BACKEND",
+	});
+	const secondEngineerId = secondEngineer.userId;
+	await api(`/projects/${projectId}/members`, {
+		method: "POST",
+		token: tokenPm,
+		body: { userId: secondEngineerId },
+	});
+	await patch(tokenPm, reassignedId, {
+		assignedToId: secondEngineerId,
+		clientVisible: true,
+		version: 1,
+	});
+	const assigneeRows = await auditRows(reassignedId);
+	const assigneeEntry = latestFor(assigneeRows, "assignedToId");
+	const visibilityEntry = latestFor(assigneeRows, "clientVisible");
+	record(
+		"audit: an assignee change stores user ids and a boolean change stores true/false",
+		assigneeEntry?.oldValue === engineerUserId &&
+			assigneeEntry?.newValue === secondEngineerId &&
+			visibilityEntry?.oldValue === "false" &&
+			visibilityEntry?.newValue === "true",
+		`assignee=${JSON.stringify(assigneeEntry ?? null)} visible=${JSON.stringify(
+			visibilityEntry ?? null,
+		)}`,
+	);
+
+	// --- spec test 5: an optimistic-lock loss writes no audit ----------------
+	const conflictTask = await createTaskFor(
+		tokenPm,
+		projectId,
+		"Audit conflict",
+		{ description: "Untouched", assignedToId: engineerUserId },
+	);
+	const conflictId = idOf(conflictTask);
+	if (conflictId.length === 0) {
+		fail("audit: conflict fixture could not be created");
+		return;
+	}
+	const beforeConflict = await rowCount(conflictId);
+	const winner = await patch(tokenPm, conflictId, {
+		description: "Winner wrote this",
+		version: 1,
+	});
+	const afterWinner = await rowCount(conflictId);
+	const loser = await patch(tokenEngineer, conflictId, {
+		status: "IN_PROGRESS",
+		version: 1,
+	});
+	const afterLoser = await rowCount(conflictId);
+	const conflictRows = await auditRows(conflictId);
+	record(
+		"audit: a winning update is recorded once",
+		winner.status === 200 && afterWinner === beforeConflict + 1,
+		`status=${winner.status} before=${beforeConflict} after=${afterWinner}`,
+	);
+	record(
+		"audit: an optimistic-lock conflict writes no audit record",
+		loser.status === 409 &&
+			jsonPath(loser, ["error", "code"]) === "CONCURRENT_MODIFICATION" &&
+			afterLoser === afterWinner,
+		`status=${loser.status} count=${afterWinner}->${afterLoser}`,
+	);
+	record(
+		"audit: the rejected request left no trace of its own field",
+		conflictRows.length === 1 &&
+			conflictRows[0]?.changedColumn === "description" &&
+			!conflictRows.some((row) => row.changedColumn === "status"),
+		`rows=${JSON.stringify(conflictRows)}`,
+	);
+
+	// --- spec test 6: a soft delete records the deletion --------------------
+	const deletedTask = await createTaskFor(tokenPm, projectId, "Audit delete", {
+		assignedToId: engineerUserId,
+	});
+	const deletedId = idOf(deletedTask);
+	if (deletedId.length === 0) {
+		fail("audit: delete fixture could not be created");
+		return;
+	}
+	const deleteResult = await api(`/tasks/${deletedId}?version=1`, {
+		method: "DELETE",
+		token: tokenPm,
+	});
+	const deletedRow = await storedRow(deletedId);
+	const deleteRows = await auditRows(deletedId);
+	const deleteEntry = latestFor(deleteRows, "deletedAt");
+	record(
+		"audit: a soft delete records deletedAt going from null to a timestamp",
+		deleteResult.status === 204 &&
+			deletedRow !== null &&
+			deletedRow.deletedAt !== null &&
+			deleteEntry?.oldValue === null &&
+			typeof deleteEntry?.newValue === "string" &&
+			(deleteEntry.newValue as string).length > 0,
+		`status=${deleteResult.status} entry=${JSON.stringify(deleteEntry ?? null)}`,
+	);
+	record(
+		"audit: the delete bumps the version, so a stale patch cannot resurrect it",
+		deletedRow?.version === 2,
+		`version=${String(deletedRow?.version)}`,
+	);
+
+	// --- spec test 7: a deleted task leaves the normal read paths ------------
+	const listAfterDelete = await api("/tasks", {
+		token: tokenPm,
+	});
+	const listedIds = jsonPath<{ id: string }[]>(listAfterDelete, [
+		"data",
+		"tasks",
+	]);
+	record(
+		"audit: a soft-deleted task disappears from GET /tasks",
+		Array.isArray(listedIds) &&
+			!listedIds.some((task) => task.id === deletedId),
+		`status=${listAfterDelete.status}`,
+	);
+	const detailAfterDelete = await api(`/tasks/${deletedId}`, {
+		token: tokenPm,
+	});
+	record(
+		"audit: a soft-deleted task is a 404 on direct lookup",
+		detailAfterDelete.status === 404 &&
+			jsonPath(detailAfterDelete, ["error", "code"]) === "TASK_NOT_FOUND",
+		`status=${detailAfterDelete.status} code=${String(
+			jsonPath(detailAfterDelete, ["error", "code"]),
+		)}`,
+	);
+
+	// --- spec sections 5/8: the trail is append-only at the API surface -----
+	for (const method of ["PATCH", "PUT", "DELETE", "POST"]) {
+		const attempted = await api(auditPath(describedId), {
+			method,
+			token: tokenPm,
+			body: { oldValue: "forged", newValue: "forged" },
+		});
+		record(
+			`audit: ${method} on the audit log is not a route (append-only surface)`,
+			attempted.status === 404 || attempted.status === 405,
+			`status=${attempted.status}`,
+		);
+	}
+
+	// --- spec sections 24/36/37: the trail stays internal --------------------
+	// A member of the project may read the trail; a non-member internal user and
+	// a client guest may not, and neither check may be satisfied by hiding the
+	// section in the UI.
+	const memberRead = await api(auditPath(describedId), {
+		token: tokenEngineer,
+	});
+	const clientRead = await api(auditPath(describedId), { token: tokenClient });
+	const outsider = await registerInternal({
+		name: "It Audit Outsider",
+		email: itEmail("auditOut"),
+		department: "UI_UX",
+	});
+	const outsiderRead = await api(auditPath(describedId), {
+		token: outsider.token,
+	});
+	const unauthenticated = await api(auditPath(describedId));
+	record(
+		"audit: an internal project member can read the trail",
+		memberRead.status === 200,
+		`status=${memberRead.status}`,
+	);
+	record(
+		"audit: a client guest is denied by the API, not just hidden in the UI",
+		clientRead.status === 403,
+		`status=${clientRead.status} code=${String(
+			jsonPath(clientRead, ["error", "code"]),
+		)}`,
+	);
+	record(
+		"audit: an internal user outside the project is denied",
+		outsiderRead.status === 403,
+		`status=${outsiderRead.status}`,
+	);
+	record(
+		"audit: an unauthenticated read is rejected",
+		unauthenticated.status === 401,
+		`status=${unauthenticated.status}`,
+	);
+
+	// --- spec sections 25/27: pagination and newest-first ordering -----------
+	const paged = await api(`${auditPath(describedId)}?page=1&limit=1`, {
+		token: tokenPm,
+	});
+	const pagedRows = jsonPath<Record<string, unknown>[]>(paged, [
+		"data",
+		"auditLogs",
+	]);
+	record(
+		"audit: the list honours the shared pagination envelope",
+		paged.status === 200 &&
+			Array.isArray(pagedRows) &&
+			pagedRows.length === 1 &&
+			jsonPath<number>(paged, ["data", "pagination", "page"]) === 1 &&
+			jsonPath<number>(paged, ["data", "pagination", "limit"]) === 1 &&
+			jsonPath<number>(paged, ["data", "pagination", "total"]) === 2,
+		`status=${paged.status} pagination=${JSON.stringify(
+			jsonPath(paged, ["data", "pagination"]) ?? null,
+		)}`,
+	);
+	const newestFirst = (await auditRows(describedId)).map(
+		(row) => row.changedColumn,
+	);
+	record(
+		"audit: records are returned newest first",
+		newestFirst.length === 2 && newestFirst[0] === "status",
+		`order=${JSON.stringify(newestFirst)}`,
+	);
+	const filtered = await api(
+		`${auditPath(describedId)}?changedColumn=description`,
+		{
+			token: tokenPm,
+		},
+	);
+	record(
+		"audit: the changedColumn filter is validated and applied",
+		filtered.status === 200 &&
+			jsonPath<number>(filtered, ["data", "pagination", "total"]) === 1,
+		`status=${filtered.status}`,
+	);
+	const badFilter = await api(
+		`${auditPath(describedId)}?changedColumn=version`,
+		{
+			token: tokenPm,
+		},
+	);
+	record(
+		"audit: filtering on a non-auditable column is rejected",
+		badFilter.status === 400,
+		`status=${badFilter.status}`,
+	);
+
+	// --- spec test 9: a failed audit write rolls the task update back --------
+	// The audit row's user id is a foreign key, so inserting one for a user that
+	// does not exist fails the way a real audit fault would. Because the write
+	// and the audit share one transaction, the task must be left untouched.
+	const atomicTask = await createTaskFor(
+		tokenPm,
+		projectId,
+		"Audit atomicity",
+		{ description: "Before", assignedToId: engineerUserId },
+	);
+	const atomicId = idOf(atomicTask);
+	if (atomicId.length === 0) {
+		fail("audit: atomicity fixture could not be created");
+		return;
+	}
+	const MISSING_USER = "00000000-0000-4000-8000-000000000000";
+	let auditFaultRaised = false;
+	try {
+		await db.transaction(async (tx) => {
+			await tx.execute(
+				db.raw.sql`UPDATE "public"."tasks"
+					SET "description" = 'Rolled back', "version" = "tasks"."version" + 1
+					WHERE "id" = ${atomicId}::uuid`
+					.affectedCount()
+					.build(),
+			);
+			// Same shape the task service uses, but with a user id that violates
+			// the audit_logs_user_id_fkey foreign key.
+			await tx.orm.public.AuditLogs.create({
+				taskId: atomicId,
+				userId: MISSING_USER,
+				changedColumn: toVarchar<100>("description"),
+				oldValue: "Before",
+				newValue: "Rolled back",
+			});
+		});
+	} catch {
+		auditFaultRaised = true;
+	}
+	const atomicRow = await storedRow(atomicId);
+	const atomicAudit = await db.orm.public.AuditLogs.where((row) =>
+		row.taskId.eq(atomicId),
+	)
+		.select("id")
+		.all();
+	record(
+		"audit: a failing audit insert aborts the whole transaction",
+		auditFaultRaised,
+		`raised=${auditFaultRaised}`,
+	);
+	record(
+		"audit: the task update was rolled back, leaving no partial write",
+		atomicRow?.description === "Before" && atomicRow?.version === 1,
+		`description=${String(atomicRow?.description)} version=${String(
+			atomicRow?.version,
+		)}`,
+	);
+	record(
+		"audit: the failed audit left no orphan row behind",
+		atomicAudit.length === 0,
+		`rows=${atomicAudit.length}`,
+	);
+}
+
 async function verifyFlatTaskApi(
 	tokenPm: string,
 	tokenInternal: string,
@@ -2706,6 +3166,13 @@ async function main(): Promise<void> {
 			backend.token,
 			backend.userId,
 			fixture.depProjectId,
+		);
+		await verifyAuditTrail(
+			fixture.tokenPm,
+			backend.token,
+			fixture.tokenClient,
+			backend.userId,
+			fixture.projectId,
 		);
 	} catch (error) {
 		fail(

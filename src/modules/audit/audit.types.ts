@@ -35,6 +35,8 @@ export type TaskAuditSnapshot = {
 	description: AuditValue;
 	assignedToId: AuditValue;
 	status: AuditValue;
+	priority: AuditValue;
+	department: AuditValue;
 	clientVisible: AuditValue;
 	deletedAt: AuditValue;
 };

@@ -694,7 +694,7 @@ export const openApiDocument = {
 				tags: ["Tasks"],
 				summary: "Update a task",
 				description:
-					"Requires a Bearer JWT. Optimistic locking: send the `version` returned by the last read. The check and the write are a single atomic statement, so when the stored version has moved on nothing is written and the request is rejected with 409 CONCURRENT_MODIFICATION — a stale client can never overwrite a newer row. The version is a concurrency token only and is never settable by the client. A matching version does not bypass authorization, the task state machine, or the dependency rules. Status changes are subject to role, membership, assignment, task state, and dependency rules: internal users may only change status on tasks assigned to them, and a task cannot move to IN_PROGRESS while required dependencies are incomplete. Only PMs may edit descriptions or change client visibility.",
+					"Requires a Bearer JWT. Optimistic locking: send the `version` returned by the last read. The check and the write are a single atomic statement, so when the stored version has moved on nothing is written and the request is rejected with 409 CONCURRENT_MODIFICATION — a stale client can never overwrite a newer row. The version is a concurrency token only and is never settable by the client. A matching version does not bypass authorization, the task state machine, or the dependency rules. Status changes are subject to role, membership, assignment, task state, and dependency rules: internal users may only change status on tasks assigned to them, and a task cannot move to IN_PROGRESS while required dependencies are incomplete. Only PMs may edit descriptions or change client visibility. Every changed column is appended to the task's audit log inside the same transaction, so a 200 always implies the history was written, and a request rejected by the version check leaves no audit trace.",
 				operationId: "updateTask",
 				security: bearerSecurity,
 				parameters: [projectIdParam("Project id"), taskIdParam("Task id")],
@@ -727,7 +727,7 @@ export const openApiDocument = {
 				tags: ["Tasks"],
 				summary: "Soft-delete a task",
 				description:
-					"Requires a Bearer JWT with the TASK_DELETE permission (PM). Optimistic locking is enforced via the `version` query parameter: the soft delete is the same atomic compare-and-swap as an update, so a delete and a patch that both start from the same version cannot both succeed, and a stale patch cannot resurrect a deleted task.",
+					"Requires a Bearer JWT with the TASK_DELETE permission (PM). Optimistic locking is enforced via the `version` query parameter: the soft delete is the same atomic compare-and-swap as an update, so a delete and a patch that both start from the same version cannot both succeed, and a stale patch cannot resurrect a deleted task. The row is never physically removed, and the `deletedAt` transition is recorded in the audit log in the same transaction.",
 				operationId: "deleteTask",
 				security: bearerSecurity,
 				parameters: [
@@ -1066,7 +1066,7 @@ export const openApiDocument = {
 				tags: ["Audit"],
 				summary: "List task audit logs",
 				description:
-					"Requires a Bearer JWT with the AUDIT_READ permission and project access (PM, INTERNAL). Audit records are immutable: there is no write endpoint.",
+					"Requires a Bearer JWT with the AUDIT_READ permission and project access (PM, INTERNAL). Client guests are refused with 403: the trail names internal actors and records internal field values. Audit records are immutable — there is no write endpoint, and the history is returned newest first.",
 				operationId: "listTaskAuditLogs",
 				security: bearerSecurity,
 				parameters: [
@@ -1218,11 +1218,15 @@ export const openApiDocument = {
 			},
 			ChangedColumn: {
 				type: "string",
+				description:
+					"A task column whose change is recorded. One entry is written per changed column, so a request that changes three fields produces three records. Purely technical columns are excluded: `version` and `updatedAt` move on every successful write and are not user actions.",
 				enum: [
 					"title",
 					"description",
 					"assignedToId",
 					"status",
+					"priority",
+					"department",
 					"clientVisible",
 					"deletedAt",
 				],
@@ -1500,16 +1504,42 @@ export const openApiDocument = {
 			},
 			AuditLog: {
 				type: "object",
+				description:
+					"One immutable field-level change. Append-only: the API exposes no route that updates or deletes an audit record, and a task mutation and its audit rows are written in the same transaction, so history can never disagree with the row it describes.",
 				properties: {
 					id: uuidSchema("Audit log id"),
 					taskId: uuidSchema("Task id"),
-					userId: uuidSchema("Acting user id"),
+					userId: uuidSchema(
+						"Acting user id, taken from the authenticated session and never from the request body",
+					),
 					changedColumn: ref("ChangedColumn"),
-					oldValue: { type: "string", nullable: true },
-					newValue: { type: "string", nullable: true },
-					createdAt: { type: "string", format: "date-time" },
+					oldValue: {
+						type: "string",
+						nullable: true,
+						description:
+							'Serialized value before the change, read from the database. Null means the column was empty; it is never the string "null".',
+					},
+					newValue: {
+						type: "string",
+						nullable: true,
+						description:
+							'Serialized value after the change. Booleans are stored as "true"/"false".',
+					},
+					createdAt: {
+						type: "string",
+						format: "date-time",
+						description: "Server-generated timestamp, never client supplied",
+					},
 				},
-				required: ["id", "taskId", "userId", "changedColumn", "createdAt"],
+				required: [
+					"id",
+					"taskId",
+					"userId",
+					"changedColumn",
+					"oldValue",
+					"newValue",
+					"createdAt",
+				],
 			},
 			AuditLogList: {
 				type: "object",
