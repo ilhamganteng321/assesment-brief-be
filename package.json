@@ -49,5 +49,7 @@
 		"hono": "^4.13.9",
 		"jsonwebtoken": "^9.0.3",
 		"zod": "^4.6.5"
-	}
+	}, "engines": {
+  "node": "22.x"
+}
 }
