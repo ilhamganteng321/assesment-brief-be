@@ -48,8 +48,10 @@
 		"dotenv": "^18.0.3",
 		"hono": "^4.13.9",
 		"jsonwebtoken": "^9.0.3",
+		"temporal-polyfill": "^1.0.5",
 		"zod": "^4.6.5"
-	}, "engines": {
-  "node": "22.x"
-}
+	},
+	"engines": {
+		"node": "22.x"
+	}
 }

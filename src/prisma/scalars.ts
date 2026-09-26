@@ -4,6 +4,10 @@ import type {
 } from "@prisma/orm-postgres/target/codec-types";
 import { blindCast } from "@prisma/orm-postgres/utils/casts";
 
+// Must precede the `Temporal` lookup below, so the global exists even if this
+// module is the first thing evaluated. See ./temporal.
+import "./temporal";
+
 export const toVarchar = <N extends number>(value: string): Varchar<N> =>
 	blindCast<
 		Varchar<N>,
@@ -35,13 +39,25 @@ type TemporalObject = {
 	};
 };
 
-const temporal = globalThis.Temporal as unknown as TemporalObject | undefined;
+/**
+ * The runtime's `Temporal`, resolved on every call rather than captured when
+ * this module is evaluated.
+ *
+ * Reading `globalThis.Temporal` once at module load looks equivalent and is not:
+ * it freezes whatever was there at that instant, so a polyfill installed by a
+ * later import would never be seen and every call would fail with "Temporal
+ * polyfill is unavailable" even though the global now exists. A lookup per call
+ * costs nothing and cannot be ordered wrongly.
+ */
+function temporalApi(): TemporalObject | undefined {
+	return globalThis.Temporal as unknown as TemporalObject | undefined;
+}
 
 export function nowTimestamp(): TimestampValue {
-	const value = temporal?.Now.zonedDateTimeISO("UTC").toPlainDateTime();
+	const value = temporalApi()?.Now.zonedDateTimeISO("UTC").toPlainDateTime();
 	if (!value) {
 		throw new Error(
-			"Temporal polyfill is unavailable; timestamp cannot be generated",
+			"Temporal is unavailable; timestamp cannot be generated. Import src/prisma/temporal before using this module.",
 		);
 	}
 	return value;
@@ -55,9 +71,10 @@ export function nowTimestamp(): TimestampValue {
 const HAS_UTC_OFFSET = /(?:Z|[+-]\d{2}:?\d{2})$/i;
 
 export function toTimestamp(value: string): TimestampValue {
+	const temporal = temporalApi();
 	if (!temporal) {
 		throw new Error(
-			"Temporal polyfill is unavailable; timestamp cannot be parsed",
+			"Temporal is unavailable; timestamp cannot be parsed. Import src/prisma/temporal before using this module.",
 		);
 	}
 

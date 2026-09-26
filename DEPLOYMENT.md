@@ -12,12 +12,35 @@ Target: deploy to Railway, reusing the current Neon PostgreSQL database.
 | `src/middleware/cors.ts` | CORS allowlist from `FRONTEND_URL` + `CORS_ORIGIN` (never `*`) |
 | `src/middleware/error-handler.ts` | Sanitized 500s; detailed stack only in logs |
 | `src/index.ts` | `Bun.serve({ hostname: "0.0.0.0", port: env.PORT })` |
+| `src/prisma/temporal.ts` | Installs a `Temporal` global; required by Prisma's `timestamp` codec on any runtime that does not ship one (see below) |
 | `.env.example` | Documented env variables (safe to commit) |
-| `migrations/app/` | 4 committed Prisma 8 migration packages |
+| `migrations/app/` | 5 committed Prisma 8 migration packages |
 | `prisma.config.ts` | Migration config; reads `DATABASE_URL` from env |
 
 `/health`, `/health/live`, `/health/ready` are public; `/docs` and `/openapi.json`
 are served in production.
+
+### Runtime requirement: `Temporal`
+
+Every `timestamp` column goes through Prisma's `pg/timestamp-temporal@1` codec,
+which throws unless a `Temporal` global exists:
+
+```
+StructuredError: Codec 'pg/timestamp-temporal@1' cannot decode a value because
+this runtime has no global Temporal implementation
+```
+
+Bun only exposes `Temporal` from 1.3 onwards and Node does not expose it at all,
+so on an older Bun this surfaced as **every request failing, starting with
+`POST /auth/login`** — which reads a user row, and therefore looks like an auth
+fault rather than a missing runtime primitive. Check `bun --version` on the
+deployed service if it appears.
+
+`temporal-polyfill` is a runtime dependency and `src/prisma/temporal.ts` installs
+it, but only when the runtime has nothing of its own, so a modern Bun keeps its
+native implementation. The module is imported by both `src/prisma/db.ts` and
+`src/prisma/scalars.ts`; keep those imports if either file is reorganised, or
+timestamps will start failing to decode again.
 
 ## 1. Decisions made
 

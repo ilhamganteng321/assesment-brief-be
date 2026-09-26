@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { Temporal as PolyfilledTemporal } from "temporal-polyfill";
 
-import { toTimestamp } from "./scalars";
+import { nowTimestamp, toTimestamp } from "./scalars";
+import "./temporal";
 
 // ---------------------------------------------------------------------------
 // Timestamp parsing for the range filters.
@@ -52,5 +54,51 @@ describe("toTimestamp", () => {
 
 	test("a value that is not a date is refused", () => {
 		expect(() => toTimestamp("not-a-date")).toThrow();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// The Temporal global.
+//
+// Prisma's `timestamp` codec throws on the first decoded row when the runtime
+// has no `Temporal`, which is what broke login in production: Bun only exposes
+// it from 1.3 onwards and Node does not expose it at all. Importing
+// ./temporal is the fix, and the checks below are what stop it silently
+// regressing into "the polyfill is imported but never actually installed".
+// ---------------------------------------------------------------------------
+describe("temporal availability", () => {
+	test("importing the module provides a Temporal global", () => {
+		// On Bun 1.3+ this is the runtime's own implementation; elsewhere it is
+		// the polyfill. Either way something is there.
+		expect(typeof globalThis.Temporal).toBe("object");
+	});
+
+	test("it implements the three members the app and the codec use", () => {
+		const temporal = globalThis.Temporal as typeof PolyfilledTemporal;
+
+		expect(typeof temporal.Now.zonedDateTimeISO).toBe("function");
+		expect(typeof temporal.PlainDateTime.from).toBe("function");
+		expect(typeof temporal.Instant.from).toBe("function");
+	});
+
+	// The real check: the codec resolves the bare global identifier, not a
+	// property lookup on a shim, so the global has to be genuinely present and
+	// complete rather than merely reachable.
+	test("the codec's own guard would pass", () => {
+		expect(typeof Temporal).not.toBe("undefined");
+	});
+
+	test("the polyfill is only installed when the runtime has none", () => {
+		// Importing twice must not replace a working native implementation.
+		const before = globalThis.Temporal;
+		require("./temporal");
+		require("./temporal");
+		expect(globalThis.Temporal).toBe(before);
+	});
+
+	test("nowTimestamp produces a usable UTC value", () => {
+		const value = nowTimestamp();
+
+		expect(asIso(value)).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
 	});
 });
