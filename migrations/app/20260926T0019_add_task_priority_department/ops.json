@@ -1,0 +1,186 @@
+[
+  {
+    "id": "createNativeEnumType.task_priority",
+    "label": "Create enum type \"task_priority\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "type",
+        "name": "task_priority"
+      }
+    },
+    "precheck": [],
+    "execute": [
+      {
+        "description": "create enum type \"task_priority\"",
+        "sql": "CREATE TYPE \"public\".\"task_priority\" AS ENUM ('LOW', 'MEDIUM', 'HIGH', 'URGENT')",
+        "params": []
+      }
+    ],
+    "postcheck": []
+  },
+  {
+    "id": "column.public.tasks.department",
+    "label": "Add column \"department\" to \"tasks\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "column",
+        "name": "department",
+        "table": "tasks"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure column \"department\" is missing",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "tasks",
+          "department"
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add column \"department\"",
+        "sql": "ALTER TABLE \"public\".\"tasks\" ADD COLUMN \"department\" \"department\" DEFAULT 'PRODUCT'::\"department\" NOT NULL"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify column \"department\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "tasks",
+          "department"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "column.public.tasks.priority",
+    "label": "Add column \"priority\" to \"tasks\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "column",
+        "name": "priority",
+        "table": "tasks"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure column \"priority\" is missing",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "tasks",
+          "priority"
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add column \"priority\"",
+        "sql": "ALTER TABLE \"public\".\"tasks\" ADD COLUMN \"priority\" \"task_priority\" DEFAULT 'MEDIUM'::\"task_priority\" NOT NULL"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify column \"priority\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "tasks",
+          "priority"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.tasks.tasks_department_idx",
+    "label": "Create index \"tasks_department_idx\" on \"tasks\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "tasks_department_idx",
+        "table": "tasks"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"tasks_department_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"tasks_department_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"tasks_department_idx\"",
+        "sql": "CREATE INDEX \"tasks_department_idx\" ON \"public\".\"tasks\" (\"department\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"tasks_department_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"tasks_department_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.tasks.tasks_priority_idx",
+    "label": "Create index \"tasks_priority_idx\" on \"tasks\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "tasks_priority_idx",
+        "table": "tasks"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"tasks_priority_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"tasks_priority_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"tasks_priority_idx\"",
+        "sql": "CREATE INDEX \"tasks_priority_idx\" ON \"public\".\"tasks\" (\"priority\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"tasks_priority_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"tasks_priority_idx\""
+        ]
+      }
+    ]
+  }
+]

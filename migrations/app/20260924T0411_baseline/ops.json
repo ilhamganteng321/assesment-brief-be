@@ -1,0 +1,886 @@
+[
+  {
+    "id": "schema.public",
+    "label": "Create schema \"public\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres"
+    },
+    "precheck": [],
+    "execute": [
+      {
+        "description": "Create schema \"public\"",
+        "sql": "CREATE SCHEMA IF NOT EXISTS \"public\"",
+        "params": []
+      }
+    ],
+    "postcheck": []
+  },
+  {
+    "id": "createNativeEnumType.booking_status",
+    "label": "Create enum type \"booking_status\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "type",
+        "name": "booking_status"
+      }
+    },
+    "precheck": [],
+    "execute": [
+      {
+        "description": "create enum type \"booking_status\"",
+        "sql": "CREATE TYPE \"public\".\"booking_status\" AS ENUM ('PENDING', 'CONFIRMED', 'CANCELLED', 'COMPLETED', 'EXPIRED')",
+        "params": []
+      }
+    ],
+    "postcheck": []
+  },
+  {
+    "id": "createNativeEnumType.payment_method",
+    "label": "Create enum type \"payment_method\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "type",
+        "name": "payment_method"
+      }
+    },
+    "precheck": [],
+    "execute": [
+      {
+        "description": "create enum type \"payment_method\"",
+        "sql": "CREATE TYPE \"public\".\"payment_method\" AS ENUM ('QRIS', 'BANK_TRANSFER', 'E_WALLET', 'CREDIT_CARD', 'VA', 'CASH')",
+        "params": []
+      }
+    ],
+    "postcheck": []
+  },
+  {
+    "id": "createNativeEnumType.payment_provider",
+    "label": "Create enum type \"payment_provider\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "type",
+        "name": "payment_provider"
+      }
+    },
+    "precheck": [],
+    "execute": [
+      {
+        "description": "create enum type \"payment_provider\"",
+        "sql": "CREATE TYPE \"public\".\"payment_provider\" AS ENUM ('MIDTRANS', 'XENDIT', 'MANUAL')",
+        "params": []
+      }
+    ],
+    "postcheck": []
+  },
+  {
+    "id": "createNativeEnumType.payment_status",
+    "label": "Create enum type \"payment_status\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "type",
+        "name": "payment_status"
+      }
+    },
+    "precheck": [],
+    "execute": [
+      {
+        "description": "create enum type \"payment_status\"",
+        "sql": "CREATE TYPE \"public\".\"payment_status\" AS ENUM ('UNPAID', 'PAID', 'FAILED', 'REFUNDED', 'EXPIRED')",
+        "params": []
+      }
+    ],
+    "postcheck": []
+  },
+  {
+    "id": "createNativeEnumType.role",
+    "label": "Create enum type \"role\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "type",
+        "name": "role"
+      }
+    },
+    "precheck": [],
+    "execute": [
+      {
+        "description": "create enum type \"role\"",
+        "sql": "CREATE TYPE \"public\".\"role\" AS ENUM ('ADMIN', 'USER')",
+        "params": []
+      }
+    ],
+    "postcheck": []
+  },
+  {
+    "id": "createNativeEnumType.transaction_status",
+    "label": "Create enum type \"transaction_status\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "type",
+        "name": "transaction_status"
+      }
+    },
+    "precheck": [],
+    "execute": [
+      {
+        "description": "create enum type \"transaction_status\"",
+        "sql": "CREATE TYPE \"public\".\"transaction_status\" AS ENUM ('PENDING', 'SETTLEMENT', 'EXPIRE', 'CANCEL', 'DENY')",
+        "params": []
+      }
+    ],
+    "postcheck": []
+  },
+  {
+    "id": "table.booking_time_slots",
+    "label": "Create table \"booking_time_slots\"",
+    "summary": "Creates table \"booking_time_slots\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "table",
+        "name": "booking_time_slots"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure table \"booking_time_slots\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"booking_time_slots\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create table \"booking_time_slots\"",
+        "sql": "CREATE TABLE \"public\".\"booking_time_slots\" (\n  \"booking_date\" date NOT NULL,\n  \"booking_id\" uuid NOT NULL,\n  \"created_at\" timestamp DEFAULT (now()) NOT NULL,\n  \"end_time\" time NOT NULL,\n  \"field_id\" uuid NOT NULL,\n  \"id\" uuid DEFAULT (gen_random_uuid()) NOT NULL,\n  \"price\" int4 NOT NULL,\n  \"start_time\" time NOT NULL,\n  CONSTRAINT \"booking_time_slots_pkey\" PRIMARY KEY (\"id\")\n)",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify table \"booking_time_slots\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"booking_time_slots\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "table.bookings",
+    "label": "Create table \"bookings\"",
+    "summary": "Creates table \"bookings\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "table",
+        "name": "bookings"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure table \"bookings\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"bookings\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create table \"bookings\"",
+        "sql": "CREATE TABLE \"public\".\"bookings\" (\n  \"booking_date\" date NOT NULL,\n  \"created_at\" timestamp DEFAULT (now()) NOT NULL,\n  \"duration_hours\" int4 NOT NULL,\n  \"field_id\" uuid NOT NULL,\n  \"id\" uuid DEFAULT (gen_random_uuid()) NOT NULL,\n  \"notes\" text,\n  \"payment_status\" \"payment_status\" DEFAULT 'UNPAID'::\"payment_status\" NOT NULL,\n  \"status\" \"booking_status\" DEFAULT 'PENDING'::\"booking_status\" NOT NULL,\n  \"total_price\" int4 NOT NULL,\n  \"updated_at\" timestamp DEFAULT (now()) NOT NULL,\n  \"user_id\" uuid NOT NULL,\n  CONSTRAINT \"bookings_pkey\" PRIMARY KEY (\"id\")\n)",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify table \"bookings\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"bookings\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "table.field_images",
+    "label": "Create table \"field_images\"",
+    "summary": "Creates table \"field_images\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "table",
+        "name": "field_images"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure table \"field_images\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"field_images\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create table \"field_images\"",
+        "sql": "CREATE TABLE \"public\".\"field_images\" (\n  \"created_at\" timestamp DEFAULT (now()) NOT NULL,\n  \"field_id\" uuid NOT NULL,\n  \"id\" uuid DEFAULT (gen_random_uuid()) NOT NULL,\n  \"image_url\" text NOT NULL,\n  CONSTRAINT \"field_images_pkey\" PRIMARY KEY (\"id\")\n)",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify table \"field_images\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"field_images\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "table.field_operating_hours",
+    "label": "Create table \"field_operating_hours\"",
+    "summary": "Creates table \"field_operating_hours\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "table",
+        "name": "field_operating_hours"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure table \"field_operating_hours\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"field_operating_hours\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create table \"field_operating_hours\"",
+        "sql": "CREATE TABLE \"public\".\"field_operating_hours\" (\n  \"close_time\" time NOT NULL,\n  \"day_of_week\" int4 NOT NULL,\n  \"field_id\" uuid NOT NULL,\n  \"id\" uuid DEFAULT (gen_random_uuid()) NOT NULL,\n  \"open_time\" time NOT NULL,\n  CONSTRAINT \"field_operating_hours_pkey\" PRIMARY KEY (\"id\")\n)",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify table \"field_operating_hours\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"field_operating_hours\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "table.fields",
+    "label": "Create table \"fields\"",
+    "summary": "Creates table \"fields\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "table",
+        "name": "fields"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure table \"fields\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"fields\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create table \"fields\"",
+        "sql": "CREATE TABLE \"public\".\"fields\" (\n  \"capacity\" int4,\n  \"created_at\" timestamp DEFAULT (now()) NOT NULL,\n  \"description\" text,\n  \"id\" uuid DEFAULT (gen_random_uuid()) NOT NULL,\n  \"image_url\" text,\n  \"is_active\" bool DEFAULT true NOT NULL,\n  \"location\" text,\n  \"name\" character varying(100) NOT NULL,\n  \"price_per_hour\" int4 NOT NULL,\n  \"slug\" character varying(120) NOT NULL,\n  \"type\" character varying(50),\n  \"updated_at\" timestamp DEFAULT (now()) NOT NULL,\n  CONSTRAINT \"fields_pkey\" PRIMARY KEY (\"id\")\n)",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify table \"fields\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"fields\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "table.transactions",
+    "label": "Create table \"transactions\"",
+    "summary": "Creates table \"transactions\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "table",
+        "name": "transactions"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure table \"transactions\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"transactions\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create table \"transactions\"",
+        "sql": "CREATE TABLE \"public\".\"transactions\" (\n  \"booking_id\" uuid NOT NULL,\n  \"created_at\" timestamp DEFAULT (now()) NOT NULL,\n  \"expired_at\" timestamp,\n  \"gross_amount\" int4 NOT NULL,\n  \"id\" uuid DEFAULT (gen_random_uuid()) NOT NULL,\n  \"order_id\" character varying(255) NOT NULL,\n  \"paid_at\" timestamp,\n  \"payment_method\" \"payment_method\",\n  \"payment_url\" text,\n  \"provider\" \"payment_provider\" NOT NULL,\n  \"snap_token\" text,\n  \"transaction_status\" \"transaction_status\" DEFAULT 'PENDING'::\"transaction_status\" NOT NULL,\n  \"updated_at\" timestamp DEFAULT (now()) NOT NULL,\n  CONSTRAINT \"transactions_pkey\" PRIMARY KEY (\"id\")\n)",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify table \"transactions\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"transactions\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "table.users",
+    "label": "Create table \"users\"",
+    "summary": "Creates table \"users\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "table",
+        "name": "users"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure table \"users\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"users\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create table \"users\"",
+        "sql": "CREATE TABLE \"public\".\"users\" (\n  \"created_at\" timestamp DEFAULT (now()) NOT NULL,\n  \"email\" character varying(255) NOT NULL,\n  \"id\" uuid DEFAULT (gen_random_uuid()) NOT NULL,\n  \"name\" character varying(100) NOT NULL,\n  \"password\" text NOT NULL,\n  \"phone\" character varying(20),\n  \"role\" \"role\" DEFAULT 'USER'::\"role\" NOT NULL,\n  \"updated_at\" timestamp DEFAULT (now()) NOT NULL,\n  CONSTRAINT \"users_pkey\" PRIMARY KEY (\"id\")\n)",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify table \"users\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"users\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "unique.booking_time_slots.booking_time_slots_field_id_booking_date_start_time_end_time_un",
+    "label": "Add unique constraint on \"booking_time_slots\" (field_id, booking_date, start_time, end_time)",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "unique",
+        "name": "booking_time_slots_field_id_booking_date_start_time_end_time_un",
+        "table": "booking_time_slots"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure constraint \"booking_time_slots_field_id_booking_date_start_time_end_time_un\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "booking_time_slots_field_id_booking_date_start_time_end_time_un",
+          "public",
+          "\"public\".\"booking_time_slots\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add unique constraint \"booking_time_slots_field_id_booking_date_start_time_end_time_un\"",
+        "sql": "ALTER TABLE \"public\".\"booking_time_slots\" ADD CONSTRAINT \"booking_time_slots_field_id_booking_date_start_time_end_time_un\" UNIQUE (\"field_id\", \"booking_date\", \"start_time\", \"end_time\")"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify constraint \"booking_time_slots_field_id_booking_date_start_time_end_time_un\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "booking_time_slots_field_id_booking_date_start_time_end_time_un",
+          "public",
+          "\"public\".\"booking_time_slots\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "unique.fields.fields_slug_unique",
+    "label": "Add unique constraint on \"fields\" (slug)",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "unique",
+        "name": "fields_slug_unique",
+        "table": "fields"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure constraint \"fields_slug_unique\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "fields_slug_unique",
+          "public",
+          "\"public\".\"fields\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add unique constraint \"fields_slug_unique\"",
+        "sql": "ALTER TABLE \"public\".\"fields\" ADD CONSTRAINT \"fields_slug_unique\" UNIQUE (\"slug\")"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify constraint \"fields_slug_unique\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "fields_slug_unique",
+          "public",
+          "\"public\".\"fields\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "unique.transactions.transactions_order_id_unique",
+    "label": "Add unique constraint on \"transactions\" (order_id)",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "unique",
+        "name": "transactions_order_id_unique",
+        "table": "transactions"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure constraint \"transactions_order_id_unique\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "transactions_order_id_unique",
+          "public",
+          "\"public\".\"transactions\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add unique constraint \"transactions_order_id_unique\"",
+        "sql": "ALTER TABLE \"public\".\"transactions\" ADD CONSTRAINT \"transactions_order_id_unique\" UNIQUE (\"order_id\")"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify constraint \"transactions_order_id_unique\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "transactions_order_id_unique",
+          "public",
+          "\"public\".\"transactions\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "unique.users.users_email_unique",
+    "label": "Add unique constraint on \"users\" (email)",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "unique",
+        "name": "users_email_unique",
+        "table": "users"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure constraint \"users_email_unique\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "users_email_unique",
+          "public",
+          "\"public\".\"users\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add unique constraint \"users_email_unique\"",
+        "sql": "ALTER TABLE \"public\".\"users\" ADD CONSTRAINT \"users_email_unique\" UNIQUE (\"email\")"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify constraint \"users_email_unique\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "users_email_unique",
+          "public",
+          "\"public\".\"users\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.booking_time_slots.booking_time_slots_booking_id_bookings_id_fk",
+    "label": "Add foreign key \"booking_time_slots_booking_id_bookings_id_fk\" on \"booking_time_slots\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "booking_time_slots_booking_id_bookings_id_fk",
+        "table": "booking_time_slots"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"booking_time_slots_booking_id_bookings_id_fk\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "booking_time_slots_booking_id_bookings_id_fk",
+          "public",
+          "\"public\".\"booking_time_slots\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"booking_time_slots_booking_id_bookings_id_fk\"",
+        "sql": "ALTER TABLE \"public\".\"booking_time_slots\"\nADD CONSTRAINT \"booking_time_slots_booking_id_bookings_id_fk\"\nFOREIGN KEY (\"booking_id\")\nREFERENCES \"public\".\"bookings\" (\"id\")\nON DELETE CASCADE"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"booking_time_slots_booking_id_bookings_id_fk\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "booking_time_slots_booking_id_bookings_id_fk",
+          "public",
+          "\"public\".\"booking_time_slots\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.booking_time_slots.booking_time_slots_field_id_fields_id_fk",
+    "label": "Add foreign key \"booking_time_slots_field_id_fields_id_fk\" on \"booking_time_slots\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "booking_time_slots_field_id_fields_id_fk",
+        "table": "booking_time_slots"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"booking_time_slots_field_id_fields_id_fk\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "booking_time_slots_field_id_fields_id_fk",
+          "public",
+          "\"public\".\"booking_time_slots\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"booking_time_slots_field_id_fields_id_fk\"",
+        "sql": "ALTER TABLE \"public\".\"booking_time_slots\"\nADD CONSTRAINT \"booking_time_slots_field_id_fields_id_fk\"\nFOREIGN KEY (\"field_id\")\nREFERENCES \"public\".\"fields\" (\"id\")\nON DELETE CASCADE"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"booking_time_slots_field_id_fields_id_fk\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "booking_time_slots_field_id_fields_id_fk",
+          "public",
+          "\"public\".\"booking_time_slots\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.bookings.bookings_field_id_fields_id_fk",
+    "label": "Add foreign key \"bookings_field_id_fields_id_fk\" on \"bookings\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "bookings_field_id_fields_id_fk",
+        "table": "bookings"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"bookings_field_id_fields_id_fk\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "bookings_field_id_fields_id_fk",
+          "public",
+          "\"public\".\"bookings\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"bookings_field_id_fields_id_fk\"",
+        "sql": "ALTER TABLE \"public\".\"bookings\"\nADD CONSTRAINT \"bookings_field_id_fields_id_fk\"\nFOREIGN KEY (\"field_id\")\nREFERENCES \"public\".\"fields\" (\"id\")\nON DELETE CASCADE"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"bookings_field_id_fields_id_fk\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "bookings_field_id_fields_id_fk",
+          "public",
+          "\"public\".\"bookings\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.bookings.bookings_user_id_users_id_fk",
+    "label": "Add foreign key \"bookings_user_id_users_id_fk\" on \"bookings\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "bookings_user_id_users_id_fk",
+        "table": "bookings"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"bookings_user_id_users_id_fk\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "bookings_user_id_users_id_fk",
+          "public",
+          "\"public\".\"bookings\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"bookings_user_id_users_id_fk\"",
+        "sql": "ALTER TABLE \"public\".\"bookings\"\nADD CONSTRAINT \"bookings_user_id_users_id_fk\"\nFOREIGN KEY (\"user_id\")\nREFERENCES \"public\".\"users\" (\"id\")\nON DELETE CASCADE"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"bookings_user_id_users_id_fk\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "bookings_user_id_users_id_fk",
+          "public",
+          "\"public\".\"bookings\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.field_images.field_images_field_id_fields_id_fk",
+    "label": "Add foreign key \"field_images_field_id_fields_id_fk\" on \"field_images\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "field_images_field_id_fields_id_fk",
+        "table": "field_images"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"field_images_field_id_fields_id_fk\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "field_images_field_id_fields_id_fk",
+          "public",
+          "\"public\".\"field_images\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"field_images_field_id_fields_id_fk\"",
+        "sql": "ALTER TABLE \"public\".\"field_images\"\nADD CONSTRAINT \"field_images_field_id_fields_id_fk\"\nFOREIGN KEY (\"field_id\")\nREFERENCES \"public\".\"fields\" (\"id\")\nON DELETE CASCADE"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"field_images_field_id_fields_id_fk\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "field_images_field_id_fields_id_fk",
+          "public",
+          "\"public\".\"field_images\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.field_operating_hours.field_operating_hours_field_id_fields_id_fk",
+    "label": "Add foreign key \"field_operating_hours_field_id_fields_id_fk\" on \"field_operating_hours\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "field_operating_hours_field_id_fields_id_fk",
+        "table": "field_operating_hours"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"field_operating_hours_field_id_fields_id_fk\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "field_operating_hours_field_id_fields_id_fk",
+          "public",
+          "\"public\".\"field_operating_hours\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"field_operating_hours_field_id_fields_id_fk\"",
+        "sql": "ALTER TABLE \"public\".\"field_operating_hours\"\nADD CONSTRAINT \"field_operating_hours_field_id_fields_id_fk\"\nFOREIGN KEY (\"field_id\")\nREFERENCES \"public\".\"fields\" (\"id\")\nON DELETE CASCADE"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"field_operating_hours_field_id_fields_id_fk\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "field_operating_hours_field_id_fields_id_fk",
+          "public",
+          "\"public\".\"field_operating_hours\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.transactions.transactions_booking_id_bookings_id_fk",
+    "label": "Add foreign key \"transactions_booking_id_bookings_id_fk\" on \"transactions\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "transactions_booking_id_bookings_id_fk",
+        "table": "transactions"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"transactions_booking_id_bookings_id_fk\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "transactions_booking_id_bookings_id_fk",
+          "public",
+          "\"public\".\"transactions\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"transactions_booking_id_bookings_id_fk\"",
+        "sql": "ALTER TABLE \"public\".\"transactions\"\nADD CONSTRAINT \"transactions_booking_id_bookings_id_fk\"\nFOREIGN KEY (\"booking_id\")\nREFERENCES \"public\".\"bookings\" (\"id\")\nON DELETE CASCADE"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"transactions_booking_id_bookings_id_fk\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "transactions_booking_id_bookings_id_fk",
+          "public",
+          "\"public\".\"transactions\""
+        ]
+      }
+    ]
+  }
+]

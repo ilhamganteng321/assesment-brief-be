@@ -1,0 +1,284 @@
+[
+  {
+    "id": "table.attachments",
+    "label": "Create table \"attachments\"",
+    "summary": "Creates table \"attachments\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "table",
+        "name": "attachments"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure table \"attachments\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"attachments\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create table \"attachments\"",
+        "sql": "CREATE TABLE \"public\".\"attachments\" (\n  \"created_at\" timestamp DEFAULT (now()) NOT NULL,\n  \"deleted_at\" timestamp,\n  \"file_name\" character varying(255) NOT NULL,\n  \"file_size\" int4 NOT NULL,\n  \"id\" uuid DEFAULT (gen_random_uuid()) NOT NULL,\n  \"mime_type\" character varying(100) NOT NULL,\n  \"storage_key\" character varying(255) NOT NULL,\n  \"task_id\" uuid NOT NULL,\n  \"uploaded_by_id\" uuid NOT NULL,\n  CONSTRAINT \"attachments_pkey\" PRIMARY KEY (\"id\")\n)",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify table \"attachments\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"attachments\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "unique.attachments.attachments_storage_key_unique",
+    "label": "Add unique constraint on \"attachments\" (storage_key)",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "unique",
+        "name": "attachments_storage_key_unique",
+        "table": "attachments"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure constraint \"attachments_storage_key_unique\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "attachments_storage_key_unique",
+          "public",
+          "\"public\".\"attachments\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add unique constraint \"attachments_storage_key_unique\"",
+        "sql": "ALTER TABLE \"public\".\"attachments\" ADD CONSTRAINT \"attachments_storage_key_unique\" UNIQUE (\"storage_key\")"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify constraint \"attachments_storage_key_unique\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "attachments_storage_key_unique",
+          "public",
+          "\"public\".\"attachments\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.attachments.attachments_deleted_at_idx",
+    "label": "Create index \"attachments_deleted_at_idx\" on \"attachments\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "attachments_deleted_at_idx",
+        "table": "attachments"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"attachments_deleted_at_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"attachments_deleted_at_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"attachments_deleted_at_idx\"",
+        "sql": "CREATE INDEX \"attachments_deleted_at_idx\" ON \"public\".\"attachments\" (\"deleted_at\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"attachments_deleted_at_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"attachments_deleted_at_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.attachments.attachments_task_id_idx",
+    "label": "Create index \"attachments_task_id_idx\" on \"attachments\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "attachments_task_id_idx",
+        "table": "attachments"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"attachments_task_id_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"attachments_task_id_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"attachments_task_id_idx\"",
+        "sql": "CREATE INDEX \"attachments_task_id_idx\" ON \"public\".\"attachments\" (\"task_id\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"attachments_task_id_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"attachments_task_id_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.attachments.attachments_uploaded_by_id_idx",
+    "label": "Create index \"attachments_uploaded_by_id_idx\" on \"attachments\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "attachments_uploaded_by_id_idx",
+        "table": "attachments"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"attachments_uploaded_by_id_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"attachments_uploaded_by_id_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"attachments_uploaded_by_id_idx\"",
+        "sql": "CREATE INDEX \"attachments_uploaded_by_id_idx\" ON \"public\".\"attachments\" (\"uploaded_by_id\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"attachments_uploaded_by_id_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"attachments_uploaded_by_id_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.attachments.attachments_task_id_fkey",
+    "label": "Add foreign key \"attachments_task_id_fkey\" on \"attachments\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "attachments_task_id_fkey",
+        "table": "attachments"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"attachments_task_id_fkey\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "attachments_task_id_fkey",
+          "public",
+          "\"public\".\"attachments\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"attachments_task_id_fkey\"",
+        "sql": "ALTER TABLE \"public\".\"attachments\"\nADD CONSTRAINT \"attachments_task_id_fkey\"\nFOREIGN KEY (\"task_id\")\nREFERENCES \"public\".\"tasks\" (\"id\")\nON DELETE CASCADE"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"attachments_task_id_fkey\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "attachments_task_id_fkey",
+          "public",
+          "\"public\".\"attachments\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.attachments.attachments_uploaded_by_id_fkey",
+    "label": "Add foreign key \"attachments_uploaded_by_id_fkey\" on \"attachments\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "attachments_uploaded_by_id_fkey",
+        "table": "attachments"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"attachments_uploaded_by_id_fkey\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "attachments_uploaded_by_id_fkey",
+          "public",
+          "\"public\".\"attachments\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"attachments_uploaded_by_id_fkey\"",
+        "sql": "ALTER TABLE \"public\".\"attachments\"\nADD CONSTRAINT \"attachments_uploaded_by_id_fkey\"\nFOREIGN KEY (\"uploaded_by_id\")\nREFERENCES \"public\".\"users\" (\"id\")\nON DELETE RESTRICT"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"attachments_uploaded_by_id_fkey\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "attachments_uploaded_by_id_fkey",
+          "public",
+          "\"public\".\"attachments\""
+        ]
+      }
+    ]
+  }
+]

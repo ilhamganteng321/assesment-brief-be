@@ -1,0 +1,352 @@
+// use prisma-8
+// Contract for NodeWave Task Management Assessment.
+// Edit as needed, then run `prisma contract emit`.
+
+namespace public {
+
+  // ============================================================
+  // USERS
+  // ============================================================
+
+  model Users {
+    id            Uuid          @id(map: "users_pkey") @default(dbgenerated("gen_random_uuid()"))
+    name          VarChar(100)
+    email         VarChar(255)  @unique(map: "users_email_unique")
+    passwordHash  String        @map("password_hash")
+    role          pg.enum(Role) @default("INTERNAL")
+    department    pg.enum(Department)
+    createdAt     Timestamp     @default(now()) @map("created_at")
+    updatedAt     Timestamp     @default(now()) @map("updated_at")
+
+    projectMembers ProjectMembers[]
+    assignedTasks  Tasks[]
+    auditLogs      AuditLogs[]
+    attachments    Attachments[]
+
+    @@index([role], map: "users_role_idx")
+    @@index([department], map: "users_department_idx")
+
+    @@map("users")
+  }
+
+
+  // ============================================================
+  // PROJECTS
+  // ============================================================
+
+  model Projects {
+    id          Uuid                @id(map: "projects_pkey") @default(dbgenerated("gen_random_uuid()"))
+    name        VarChar(150)
+    description String?
+    clientName  VarChar(150)?       @map("client_name")
+    status      pg.enum(ProjectStatus) @default("ACTIVE")
+    createdAt   Timestamp           @default(now()) @map("created_at")
+    updatedAt   Timestamp           @default(now()) @map("updated_at")
+    deletedAt   Timestamp?          @map("deleted_at")
+
+    members     ProjectMembers[]
+    tasks       Tasks[]
+
+    @@index([status], map: "projects_status_idx")
+    @@index([deletedAt], map: "projects_deleted_at_idx")
+
+    @@map("projects")
+  }
+
+
+  // ============================================================
+  // PROJECT MEMBERS
+  // ============================================================
+
+  model ProjectMembers {
+    id        Uuid      @id(map: "project_members_pkey") @default(dbgenerated("gen_random_uuid()"))
+    projectId Uuid      @map("project_id")
+    userId    Uuid      @map("user_id")
+    createdAt Timestamp @default(now()) @map("created_at")
+
+    project Projects @relation(
+      fields: [projectId],
+      references: [id],
+      onDelete: Cascade,
+      map: "project_members_project_id_fkey",
+      index: false
+    )
+
+    user Users @relation(
+      fields: [userId],
+      references: [id],
+      onDelete: Cascade,
+      map: "project_members_user_id_fkey",
+      index: false
+    )
+
+    @@unique(
+      [projectId, userId],
+      map: "project_members_project_id_user_id_unique"
+    )
+
+    @@index([userId], map: "project_members_user_id_idx")
+
+    @@map("project_members")
+  }
+
+
+  // ============================================================
+  // TASKS
+  // ============================================================
+
+  model Tasks {
+    id            Uuid            @id(map: "tasks_pkey") @default(dbgenerated("gen_random_uuid()"))
+    projectId     Uuid            @map("project_id")
+    assignedToId  Uuid?           @map("assigned_to_id")
+
+    title         VarChar(200)
+    description   String?
+
+    status        pg.enum(TaskStatus) @default("TODO")
+    priority      pg.enum(TaskPriority) @default("MEDIUM")
+    department    pg.enum(Department) @default("PRODUCT")
+
+    clientVisible Boolean         @default(false) @map("client_visible")
+
+    // Optimistic locking
+    version       Int             @default(1)
+
+    createdAt     Timestamp       @default(now()) @map("created_at")
+    updatedAt     Timestamp       @default(now()) @map("updated_at")
+    deletedAt     Timestamp?      @map("deleted_at")
+
+    project Projects @relation(
+      fields: [projectId],
+      references: [id],
+      onDelete: Cascade,
+      map: "tasks_project_id_fkey",
+      index: false
+    )
+
+    assignedTo Users? @relation(
+      fields: [assignedToId],
+      references: [id],
+      onDelete: SetNull,
+      map: "tasks_assigned_to_id_fkey",
+      index: false
+    )
+
+    dependencies TaskDependencies[] @relation("TaskDependencies")
+    dependents   TaskDependencies[] @relation("TaskDependents")
+
+    auditLogs AuditLogs[]
+    attachments Attachments[]
+
+    @@index([projectId], map: "tasks_project_id_idx")
+    @@index([assignedToId], map: "tasks_assigned_to_id_idx")
+    @@index([status], map: "tasks_status_idx")
+    @@index([priority], map: "tasks_priority_idx")
+    @@index([department], map: "tasks_department_idx")
+    @@index([clientVisible], map: "tasks_client_visible_idx")
+    @@index([deletedAt], map: "tasks_deleted_at_idx")
+
+    @@map("tasks")
+  }
+
+
+  // ============================================================
+  // TASK DEPENDENCIES
+  //
+  // dependentTaskId depends on dependencyTaskId
+  //
+  // Example:
+  //
+  // Frontend Task
+  //      ↓
+  // depends on
+  //      ↓
+  // UI/UX Task
+  //
+  // UI/UX must be DONE before Frontend
+  // can move to IN_PROGRESS.
+  // ============================================================
+
+  model TaskDependencies {
+    id               Uuid      @id(map: "task_dependencies_pkey") @default(dbgenerated("gen_random_uuid()"))
+
+    dependentTaskId  Uuid      @map("dependent_task_id")
+    dependencyTaskId Uuid      @map("dependency_task_id")
+
+    createdAt        Timestamp @default(now()) @map("created_at")
+
+    dependentTask Tasks @relation(
+      "TaskDependencies",
+      fields: [dependentTaskId],
+      references: [id],
+      onDelete: Cascade,
+      map: "task_dependencies_dependent_task_id_fkey",
+      index: false
+    )
+
+    dependencyTask Tasks @relation(
+      "TaskDependents",
+      fields: [dependencyTaskId],
+      references: [id],
+      onDelete: Cascade,
+      map: "task_dependencies_dependency_task_id_fkey",
+      index: false
+    )
+
+    @@unique(
+      [dependentTaskId, dependencyTaskId],
+      map: "task_dependencies_unique"
+    )
+
+    @@index(
+      [dependentTaskId],
+      map: "task_dependencies_dependent_task_id_idx"
+    )
+
+    @@index(
+      [dependencyTaskId],
+      map: "task_dependencies_dependency_task_id_idx"
+    )
+
+    @@map("task_dependencies")
+  }
+
+
+  // ============================================================
+  // TASK WORK ATTACHMENTS
+  //
+  // File metadata only. The binary payload lives in the storage
+  // provider; `storageKey` is the opaque reference used to fetch it.
+  // ============================================================
+
+  model Attachments {
+    id            Uuid         @id(map: "attachments_pkey") @default(dbgenerated("gen_random_uuid()"))
+
+    taskId        Uuid         @map("task_id")
+    uploadedById  Uuid         @map("uploaded_by_id")
+
+    fileName      VarChar(255) @map("file_name")
+    storageKey    VarChar(255) @unique(map: "attachments_storage_key_unique") @map("storage_key")
+    mimeType      VarChar(100) @map("mime_type")
+    fileSize      Int          @map("file_size")
+
+    createdAt     Timestamp    @default(now()) @map("created_at")
+    deletedAt     Timestamp?   @map("deleted_at")
+
+    task Tasks @relation(
+      fields: [taskId],
+      references: [id],
+      onDelete: Cascade,
+      map: "attachments_task_id_fkey",
+      index: false
+    )
+
+    uploadedBy Users @relation(
+      fields: [uploadedById],
+      references: [id],
+      onDelete: Restrict,
+      map: "attachments_uploaded_by_id_fkey",
+      index: false
+    )
+
+    @@index([taskId], map: "attachments_task_id_idx")
+    @@index([uploadedById], map: "attachments_uploaded_by_id_idx")
+    @@index([deletedAt], map: "attachments_deleted_at_idx")
+
+    @@map("attachments")
+  }
+
+
+  // ============================================================
+  // AUDIT LOGS
+  // ============================================================
+
+  model AuditLogs {
+    id            Uuid         @id(map: "audit_logs_pkey") @default(dbgenerated("gen_random_uuid()"))
+
+    taskId        Uuid         @map("task_id")
+    userId        Uuid         @map("user_id")
+
+    changedColumn VarChar(100) @map("changed_column")
+    oldValue      String?      @map("old_value")
+    newValue      String?      @map("new_value")
+
+    createdAt     Timestamp    @default(now()) @map("created_at")
+
+    task Tasks @relation(
+      fields: [taskId],
+      references: [id],
+      onDelete: Cascade,
+      map: "audit_logs_task_id_fkey",
+      index: false
+    )
+
+    user Users @relation(
+      fields: [userId],
+      references: [id],
+      onDelete: Restrict,
+      map: "audit_logs_user_id_fkey",
+      index: false
+    )
+
+    @@index([taskId], map: "audit_logs_task_id_idx")
+    @@index([userId], map: "audit_logs_user_id_idx")
+    @@index([createdAt], map: "audit_logs_created_at_idx")
+
+    @@map("audit_logs")
+  }
+
+
+  // ============================================================
+  // ENUMS
+  // ============================================================
+
+  native_enum Role {
+    PM = "PM"
+    INTERNAL = "INTERNAL"
+    CLIENT = "CLIENT"
+
+    @@map("role")
+  }
+
+
+  native_enum Department {
+    PRODUCT = "PRODUCT"
+    UI_UX = "UI_UX"
+    FRONTEND = "FRONTEND"
+    BACKEND = "BACKEND"
+    CLIENT = "CLIENT"
+
+    @@map("department")
+  }
+
+
+  native_enum ProjectStatus {
+    ACTIVE = "ACTIVE"
+    COMPLETED = "COMPLETED"
+    ARCHIVED = "ARCHIVED"
+    PLANNING = "PLANNING"
+
+    @@map("project_status")
+  }
+
+
+  native_enum TaskStatus {
+    TODO = "TODO"
+    BLOCKED = "BLOCKED"
+    IN_PROGRESS = "IN_PROGRESS"
+    DONE = "DONE"
+
+    @@map("task_status")
+  }
+
+
+  native_enum TaskPriority {
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    URGENT = "URGENT"
+
+    @@map("task_priority")
+  }
+}

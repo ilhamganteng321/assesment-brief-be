@@ -1,0 +1,3 @@
+export const AUTH_JSON_BODY_LIMIT_BYTES = 16 * 1024;
+
+export const JSON_BODY_LIMIT_BYTES = 1024 * 1024;

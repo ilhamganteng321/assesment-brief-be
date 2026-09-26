@@ -1,0 +1,1371 @@
+[
+  {
+    "id": "createNativeEnumType.department",
+    "label": "Create enum type \"department\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "type",
+        "name": "department"
+      }
+    },
+    "precheck": [],
+    "execute": [
+      {
+        "description": "create enum type \"department\"",
+        "sql": "CREATE TYPE \"public\".\"department\" AS ENUM ('PRODUCT', 'UI_UX', 'FRONTEND', 'BACKEND', 'CLIENT')",
+        "params": []
+      }
+    ],
+    "postcheck": []
+  },
+  {
+    "id": "createNativeEnumType.project_status",
+    "label": "Create enum type \"project_status\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "type",
+        "name": "project_status"
+      }
+    },
+    "precheck": [],
+    "execute": [
+      {
+        "description": "create enum type \"project_status\"",
+        "sql": "CREATE TYPE \"public\".\"project_status\" AS ENUM ('ACTIVE', 'COMPLETED', 'ARCHIVED')",
+        "params": []
+      }
+    ],
+    "postcheck": []
+  },
+  {
+    "id": "createNativeEnumType.role",
+    "label": "Create enum type \"role\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "type",
+        "name": "role"
+      }
+    },
+    "precheck": [],
+    "execute": [
+      {
+        "description": "create enum type \"role\"",
+        "sql": "CREATE TYPE \"public\".\"role\" AS ENUM ('PM', 'INTERNAL', 'CLIENT')",
+        "params": []
+      }
+    ],
+    "postcheck": []
+  },
+  {
+    "id": "createNativeEnumType.task_status",
+    "label": "Create enum type \"task_status\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "type",
+        "name": "task_status"
+      }
+    },
+    "precheck": [],
+    "execute": [
+      {
+        "description": "create enum type \"task_status\"",
+        "sql": "CREATE TYPE \"public\".\"task_status\" AS ENUM ('TODO', 'BLOCKED', 'IN_PROGRESS', 'DONE')",
+        "params": []
+      }
+    ],
+    "postcheck": []
+  },
+  {
+    "id": "table.audit_logs",
+    "label": "Create table \"audit_logs\"",
+    "summary": "Creates table \"audit_logs\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "table",
+        "name": "audit_logs"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure table \"audit_logs\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"audit_logs\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create table \"audit_logs\"",
+        "sql": "CREATE TABLE \"public\".\"audit_logs\" (\n  \"changed_column\" character varying(100) NOT NULL,\n  \"created_at\" timestamp DEFAULT (now()) NOT NULL,\n  \"id\" uuid DEFAULT (gen_random_uuid()) NOT NULL,\n  \"new_value\" text,\n  \"old_value\" text,\n  \"task_id\" uuid NOT NULL,\n  \"user_id\" uuid NOT NULL,\n  CONSTRAINT \"audit_logs_pkey\" PRIMARY KEY (\"id\")\n)",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify table \"audit_logs\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"audit_logs\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "table.project_members",
+    "label": "Create table \"project_members\"",
+    "summary": "Creates table \"project_members\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "table",
+        "name": "project_members"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure table \"project_members\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"project_members\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create table \"project_members\"",
+        "sql": "CREATE TABLE \"public\".\"project_members\" (\n  \"created_at\" timestamp DEFAULT (now()) NOT NULL,\n  \"id\" uuid DEFAULT (gen_random_uuid()) NOT NULL,\n  \"project_id\" uuid NOT NULL,\n  \"user_id\" uuid NOT NULL,\n  CONSTRAINT \"project_members_pkey\" PRIMARY KEY (\"id\")\n)",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify table \"project_members\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"project_members\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "table.projects",
+    "label": "Create table \"projects\"",
+    "summary": "Creates table \"projects\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "table",
+        "name": "projects"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure table \"projects\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"projects\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create table \"projects\"",
+        "sql": "CREATE TABLE \"public\".\"projects\" (\n  \"client_name\" character varying(150),\n  \"created_at\" timestamp DEFAULT (now()) NOT NULL,\n  \"deleted_at\" timestamp,\n  \"description\" text,\n  \"id\" uuid DEFAULT (gen_random_uuid()) NOT NULL,\n  \"name\" character varying(150) NOT NULL,\n  \"status\" \"project_status\" DEFAULT 'ACTIVE'::\"project_status\" NOT NULL,\n  \"updated_at\" timestamp DEFAULT (now()) NOT NULL,\n  CONSTRAINT \"projects_pkey\" PRIMARY KEY (\"id\")\n)",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify table \"projects\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"projects\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "table.task_dependencies",
+    "label": "Create table \"task_dependencies\"",
+    "summary": "Creates table \"task_dependencies\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "table",
+        "name": "task_dependencies"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure table \"task_dependencies\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"task_dependencies\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create table \"task_dependencies\"",
+        "sql": "CREATE TABLE \"public\".\"task_dependencies\" (\n  \"created_at\" timestamp DEFAULT (now()) NOT NULL,\n  \"dependency_task_id\" uuid NOT NULL,\n  \"dependent_task_id\" uuid NOT NULL,\n  \"id\" uuid DEFAULT (gen_random_uuid()) NOT NULL,\n  CONSTRAINT \"task_dependencies_pkey\" PRIMARY KEY (\"id\")\n)",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify table \"task_dependencies\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"task_dependencies\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "table.tasks",
+    "label": "Create table \"tasks\"",
+    "summary": "Creates table \"tasks\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "table",
+        "name": "tasks"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure table \"tasks\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"tasks\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create table \"tasks\"",
+        "sql": "CREATE TABLE \"public\".\"tasks\" (\n  \"assigned_to_id\" uuid,\n  \"client_visible\" bool DEFAULT false NOT NULL,\n  \"created_at\" timestamp DEFAULT (now()) NOT NULL,\n  \"deleted_at\" timestamp,\n  \"description\" text,\n  \"id\" uuid DEFAULT (gen_random_uuid()) NOT NULL,\n  \"project_id\" uuid NOT NULL,\n  \"status\" \"task_status\" DEFAULT 'TODO'::\"task_status\" NOT NULL,\n  \"title\" character varying(200) NOT NULL,\n  \"updated_at\" timestamp DEFAULT (now()) NOT NULL,\n  \"version\" int4 DEFAULT 1 NOT NULL,\n  CONSTRAINT \"tasks_pkey\" PRIMARY KEY (\"id\")\n)",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify table \"tasks\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"tasks\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "table.users",
+    "label": "Create table \"users\"",
+    "summary": "Creates table \"users\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "table",
+        "name": "users"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure table \"users\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"users\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create table \"users\"",
+        "sql": "CREATE TABLE \"public\".\"users\" (\n  \"created_at\" timestamp DEFAULT (now()) NOT NULL,\n  \"department\" \"department\" NOT NULL,\n  \"email\" character varying(255) NOT NULL,\n  \"id\" uuid DEFAULT (gen_random_uuid()) NOT NULL,\n  \"name\" character varying(100) NOT NULL,\n  \"password_hash\" text NOT NULL,\n  \"role\" \"role\" DEFAULT 'INTERNAL'::\"role\" NOT NULL,\n  \"updated_at\" timestamp DEFAULT (now()) NOT NULL,\n  CONSTRAINT \"users_pkey\" PRIMARY KEY (\"id\")\n)",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify table \"users\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"users\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "unique.project_members.project_members_project_id_user_id_unique",
+    "label": "Add unique constraint on \"project_members\" (project_id, user_id)",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "unique",
+        "name": "project_members_project_id_user_id_unique",
+        "table": "project_members"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure constraint \"project_members_project_id_user_id_unique\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "project_members_project_id_user_id_unique",
+          "public",
+          "\"public\".\"project_members\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add unique constraint \"project_members_project_id_user_id_unique\"",
+        "sql": "ALTER TABLE \"public\".\"project_members\" ADD CONSTRAINT \"project_members_project_id_user_id_unique\" UNIQUE (\"project_id\", \"user_id\")"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify constraint \"project_members_project_id_user_id_unique\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "project_members_project_id_user_id_unique",
+          "public",
+          "\"public\".\"project_members\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "unique.task_dependencies.task_dependencies_unique",
+    "label": "Add unique constraint on \"task_dependencies\" (dependent_task_id, dependency_task_id)",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "unique",
+        "name": "task_dependencies_unique",
+        "table": "task_dependencies"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure constraint \"task_dependencies_unique\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "task_dependencies_unique",
+          "public",
+          "\"public\".\"task_dependencies\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add unique constraint \"task_dependencies_unique\"",
+        "sql": "ALTER TABLE \"public\".\"task_dependencies\" ADD CONSTRAINT \"task_dependencies_unique\" UNIQUE (\"dependent_task_id\", \"dependency_task_id\")"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify constraint \"task_dependencies_unique\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "task_dependencies_unique",
+          "public",
+          "\"public\".\"task_dependencies\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "unique.users.users_email_unique",
+    "label": "Add unique constraint on \"users\" (email)",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "unique",
+        "name": "users_email_unique",
+        "table": "users"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure constraint \"users_email_unique\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "users_email_unique",
+          "public",
+          "\"public\".\"users\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add unique constraint \"users_email_unique\"",
+        "sql": "ALTER TABLE \"public\".\"users\" ADD CONSTRAINT \"users_email_unique\" UNIQUE (\"email\")"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify constraint \"users_email_unique\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "users_email_unique",
+          "public",
+          "\"public\".\"users\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.audit_logs.audit_logs_created_at_idx",
+    "label": "Create index \"audit_logs_created_at_idx\" on \"audit_logs\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "audit_logs_created_at_idx",
+        "table": "audit_logs"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"audit_logs_created_at_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"audit_logs_created_at_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"audit_logs_created_at_idx\"",
+        "sql": "CREATE INDEX \"audit_logs_created_at_idx\" ON \"public\".\"audit_logs\" (\"created_at\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"audit_logs_created_at_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"audit_logs_created_at_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.audit_logs.audit_logs_task_id_idx",
+    "label": "Create index \"audit_logs_task_id_idx\" on \"audit_logs\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "audit_logs_task_id_idx",
+        "table": "audit_logs"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"audit_logs_task_id_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"audit_logs_task_id_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"audit_logs_task_id_idx\"",
+        "sql": "CREATE INDEX \"audit_logs_task_id_idx\" ON \"public\".\"audit_logs\" (\"task_id\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"audit_logs_task_id_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"audit_logs_task_id_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.audit_logs.audit_logs_user_id_idx",
+    "label": "Create index \"audit_logs_user_id_idx\" on \"audit_logs\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "audit_logs_user_id_idx",
+        "table": "audit_logs"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"audit_logs_user_id_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"audit_logs_user_id_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"audit_logs_user_id_idx\"",
+        "sql": "CREATE INDEX \"audit_logs_user_id_idx\" ON \"public\".\"audit_logs\" (\"user_id\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"audit_logs_user_id_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"audit_logs_user_id_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.project_members.project_members_user_id_idx",
+    "label": "Create index \"project_members_user_id_idx\" on \"project_members\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "project_members_user_id_idx",
+        "table": "project_members"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"project_members_user_id_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"project_members_user_id_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"project_members_user_id_idx\"",
+        "sql": "CREATE INDEX \"project_members_user_id_idx\" ON \"public\".\"project_members\" (\"user_id\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"project_members_user_id_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"project_members_user_id_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.projects.projects_deleted_at_idx",
+    "label": "Create index \"projects_deleted_at_idx\" on \"projects\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "projects_deleted_at_idx",
+        "table": "projects"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"projects_deleted_at_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"projects_deleted_at_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"projects_deleted_at_idx\"",
+        "sql": "CREATE INDEX \"projects_deleted_at_idx\" ON \"public\".\"projects\" (\"deleted_at\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"projects_deleted_at_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"projects_deleted_at_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.projects.projects_status_idx",
+    "label": "Create index \"projects_status_idx\" on \"projects\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "projects_status_idx",
+        "table": "projects"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"projects_status_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"projects_status_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"projects_status_idx\"",
+        "sql": "CREATE INDEX \"projects_status_idx\" ON \"public\".\"projects\" (\"status\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"projects_status_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"projects_status_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.task_dependencies.task_dependencies_dependency_task_id_idx",
+    "label": "Create index \"task_dependencies_dependency_task_id_idx\" on \"task_dependencies\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "task_dependencies_dependency_task_id_idx",
+        "table": "task_dependencies"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"task_dependencies_dependency_task_id_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"task_dependencies_dependency_task_id_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"task_dependencies_dependency_task_id_idx\"",
+        "sql": "CREATE INDEX \"task_dependencies_dependency_task_id_idx\" ON \"public\".\"task_dependencies\" (\"dependency_task_id\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"task_dependencies_dependency_task_id_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"task_dependencies_dependency_task_id_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.task_dependencies.task_dependencies_dependent_task_id_idx",
+    "label": "Create index \"task_dependencies_dependent_task_id_idx\" on \"task_dependencies\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "task_dependencies_dependent_task_id_idx",
+        "table": "task_dependencies"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"task_dependencies_dependent_task_id_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"task_dependencies_dependent_task_id_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"task_dependencies_dependent_task_id_idx\"",
+        "sql": "CREATE INDEX \"task_dependencies_dependent_task_id_idx\" ON \"public\".\"task_dependencies\" (\"dependent_task_id\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"task_dependencies_dependent_task_id_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"task_dependencies_dependent_task_id_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.tasks.tasks_assigned_to_id_idx",
+    "label": "Create index \"tasks_assigned_to_id_idx\" on \"tasks\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "tasks_assigned_to_id_idx",
+        "table": "tasks"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"tasks_assigned_to_id_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"tasks_assigned_to_id_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"tasks_assigned_to_id_idx\"",
+        "sql": "CREATE INDEX \"tasks_assigned_to_id_idx\" ON \"public\".\"tasks\" (\"assigned_to_id\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"tasks_assigned_to_id_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"tasks_assigned_to_id_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.tasks.tasks_client_visible_idx",
+    "label": "Create index \"tasks_client_visible_idx\" on \"tasks\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "tasks_client_visible_idx",
+        "table": "tasks"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"tasks_client_visible_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"tasks_client_visible_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"tasks_client_visible_idx\"",
+        "sql": "CREATE INDEX \"tasks_client_visible_idx\" ON \"public\".\"tasks\" (\"client_visible\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"tasks_client_visible_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"tasks_client_visible_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.tasks.tasks_deleted_at_idx",
+    "label": "Create index \"tasks_deleted_at_idx\" on \"tasks\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "tasks_deleted_at_idx",
+        "table": "tasks"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"tasks_deleted_at_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"tasks_deleted_at_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"tasks_deleted_at_idx\"",
+        "sql": "CREATE INDEX \"tasks_deleted_at_idx\" ON \"public\".\"tasks\" (\"deleted_at\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"tasks_deleted_at_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"tasks_deleted_at_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.tasks.tasks_project_id_idx",
+    "label": "Create index \"tasks_project_id_idx\" on \"tasks\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "tasks_project_id_idx",
+        "table": "tasks"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"tasks_project_id_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"tasks_project_id_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"tasks_project_id_idx\"",
+        "sql": "CREATE INDEX \"tasks_project_id_idx\" ON \"public\".\"tasks\" (\"project_id\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"tasks_project_id_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"tasks_project_id_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.tasks.tasks_status_idx",
+    "label": "Create index \"tasks_status_idx\" on \"tasks\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "tasks_status_idx",
+        "table": "tasks"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"tasks_status_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"tasks_status_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"tasks_status_idx\"",
+        "sql": "CREATE INDEX \"tasks_status_idx\" ON \"public\".\"tasks\" (\"status\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"tasks_status_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"tasks_status_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.users.users_department_idx",
+    "label": "Create index \"users_department_idx\" on \"users\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "users_department_idx",
+        "table": "users"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"users_department_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"users_department_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"users_department_idx\"",
+        "sql": "CREATE INDEX \"users_department_idx\" ON \"public\".\"users\" (\"department\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"users_department_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"users_department_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.users.users_role_idx",
+    "label": "Create index \"users_role_idx\" on \"users\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "users_role_idx",
+        "table": "users"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"users_role_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"users_role_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"users_role_idx\"",
+        "sql": "CREATE INDEX \"users_role_idx\" ON \"public\".\"users\" (\"role\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"users_role_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"users_role_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.audit_logs.audit_logs_task_id_fkey",
+    "label": "Add foreign key \"audit_logs_task_id_fkey\" on \"audit_logs\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "audit_logs_task_id_fkey",
+        "table": "audit_logs"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"audit_logs_task_id_fkey\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "audit_logs_task_id_fkey",
+          "public",
+          "\"public\".\"audit_logs\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"audit_logs_task_id_fkey\"",
+        "sql": "ALTER TABLE \"public\".\"audit_logs\"\nADD CONSTRAINT \"audit_logs_task_id_fkey\"\nFOREIGN KEY (\"task_id\")\nREFERENCES \"public\".\"tasks\" (\"id\")\nON DELETE CASCADE"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"audit_logs_task_id_fkey\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "audit_logs_task_id_fkey",
+          "public",
+          "\"public\".\"audit_logs\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.audit_logs.audit_logs_user_id_fkey",
+    "label": "Add foreign key \"audit_logs_user_id_fkey\" on \"audit_logs\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "audit_logs_user_id_fkey",
+        "table": "audit_logs"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"audit_logs_user_id_fkey\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "audit_logs_user_id_fkey",
+          "public",
+          "\"public\".\"audit_logs\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"audit_logs_user_id_fkey\"",
+        "sql": "ALTER TABLE \"public\".\"audit_logs\"\nADD CONSTRAINT \"audit_logs_user_id_fkey\"\nFOREIGN KEY (\"user_id\")\nREFERENCES \"public\".\"users\" (\"id\")\nON DELETE RESTRICT"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"audit_logs_user_id_fkey\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "audit_logs_user_id_fkey",
+          "public",
+          "\"public\".\"audit_logs\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.project_members.project_members_project_id_fkey",
+    "label": "Add foreign key \"project_members_project_id_fkey\" on \"project_members\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "project_members_project_id_fkey",
+        "table": "project_members"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"project_members_project_id_fkey\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "project_members_project_id_fkey",
+          "public",
+          "\"public\".\"project_members\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"project_members_project_id_fkey\"",
+        "sql": "ALTER TABLE \"public\".\"project_members\"\nADD CONSTRAINT \"project_members_project_id_fkey\"\nFOREIGN KEY (\"project_id\")\nREFERENCES \"public\".\"projects\" (\"id\")\nON DELETE CASCADE"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"project_members_project_id_fkey\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "project_members_project_id_fkey",
+          "public",
+          "\"public\".\"project_members\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.project_members.project_members_user_id_fkey",
+    "label": "Add foreign key \"project_members_user_id_fkey\" on \"project_members\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "project_members_user_id_fkey",
+        "table": "project_members"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"project_members_user_id_fkey\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "project_members_user_id_fkey",
+          "public",
+          "\"public\".\"project_members\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"project_members_user_id_fkey\"",
+        "sql": "ALTER TABLE \"public\".\"project_members\"\nADD CONSTRAINT \"project_members_user_id_fkey\"\nFOREIGN KEY (\"user_id\")\nREFERENCES \"public\".\"users\" (\"id\")\nON DELETE CASCADE"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"project_members_user_id_fkey\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "project_members_user_id_fkey",
+          "public",
+          "\"public\".\"project_members\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.task_dependencies.task_dependencies_dependent_task_id_fkey",
+    "label": "Add foreign key \"task_dependencies_dependent_task_id_fkey\" on \"task_dependencies\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "task_dependencies_dependent_task_id_fkey",
+        "table": "task_dependencies"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"task_dependencies_dependent_task_id_fkey\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "task_dependencies_dependent_task_id_fkey",
+          "public",
+          "\"public\".\"task_dependencies\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"task_dependencies_dependent_task_id_fkey\"",
+        "sql": "ALTER TABLE \"public\".\"task_dependencies\"\nADD CONSTRAINT \"task_dependencies_dependent_task_id_fkey\"\nFOREIGN KEY (\"dependent_task_id\")\nREFERENCES \"public\".\"tasks\" (\"id\")\nON DELETE CASCADE"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"task_dependencies_dependent_task_id_fkey\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "task_dependencies_dependent_task_id_fkey",
+          "public",
+          "\"public\".\"task_dependencies\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.task_dependencies.task_dependencies_dependency_task_id_fkey",
+    "label": "Add foreign key \"task_dependencies_dependency_task_id_fkey\" on \"task_dependencies\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "task_dependencies_dependency_task_id_fkey",
+        "table": "task_dependencies"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"task_dependencies_dependency_task_id_fkey\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "task_dependencies_dependency_task_id_fkey",
+          "public",
+          "\"public\".\"task_dependencies\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"task_dependencies_dependency_task_id_fkey\"",
+        "sql": "ALTER TABLE \"public\".\"task_dependencies\"\nADD CONSTRAINT \"task_dependencies_dependency_task_id_fkey\"\nFOREIGN KEY (\"dependency_task_id\")\nREFERENCES \"public\".\"tasks\" (\"id\")\nON DELETE CASCADE"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"task_dependencies_dependency_task_id_fkey\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "task_dependencies_dependency_task_id_fkey",
+          "public",
+          "\"public\".\"task_dependencies\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.tasks.tasks_project_id_fkey",
+    "label": "Add foreign key \"tasks_project_id_fkey\" on \"tasks\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "tasks_project_id_fkey",
+        "table": "tasks"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"tasks_project_id_fkey\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "tasks_project_id_fkey",
+          "public",
+          "\"public\".\"tasks\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"tasks_project_id_fkey\"",
+        "sql": "ALTER TABLE \"public\".\"tasks\"\nADD CONSTRAINT \"tasks_project_id_fkey\"\nFOREIGN KEY (\"project_id\")\nREFERENCES \"public\".\"projects\" (\"id\")\nON DELETE CASCADE"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"tasks_project_id_fkey\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "tasks_project_id_fkey",
+          "public",
+          "\"public\".\"tasks\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.tasks.tasks_assigned_to_id_fkey",
+    "label": "Add foreign key \"tasks_assigned_to_id_fkey\" on \"tasks\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "tasks_assigned_to_id_fkey",
+        "table": "tasks"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"tasks_assigned_to_id_fkey\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "tasks_assigned_to_id_fkey",
+          "public",
+          "\"public\".\"tasks\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"tasks_assigned_to_id_fkey\"",
+        "sql": "ALTER TABLE \"public\".\"tasks\"\nADD CONSTRAINT \"tasks_assigned_to_id_fkey\"\nFOREIGN KEY (\"assigned_to_id\")\nREFERENCES \"public\".\"users\" (\"id\")\nON DELETE SET NULL"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"tasks_assigned_to_id_fkey\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "tasks_assigned_to_id_fkey",
+          "public",
+          "\"public\".\"tasks\""
+        ]
+      }
+    ]
+  }
+]
