@@ -1,3 +1,12 @@
+# Normalise line endings in the repository and in every checkout.
+#
+# Biome formats to LF, so a Windows checkout left at the platform default
+# materialises CRLF and the working tree is then permanently "unformatted"
+# against its own committed content: `bun run lint` fails on files that are
+# byte-identical to HEAD. `eol=lf` keeps the checkout matching the stored blob on
+# every platform.
+* text=auto eol=lf
+
 src/prisma/contract.json linguist-generated
 src/prisma/contract.d.ts linguist-generated
 src/prisma/ops.json linguist-generated
