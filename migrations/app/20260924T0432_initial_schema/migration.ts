@@ -1,12 +1,16 @@
 #!/usr/bin/env -S node
-import type { Contract as Start } from '../../snapshots/0c0734babd6eeb868fee1f281ca96963022475611560e9f170f465daa35f8599/contract';
-import startContract from '../../snapshots/0c0734babd6eeb868fee1f281ca96963022475611560e9f170f465daa35f8599/contract.json' with { type: 'json' };
 import type { Contract as End } from '../../snapshots/3e59e30f6c4a1f0af569482c391acf861c88c70a0f5cf1940d06c526b0a18938/contract';
 import endContract from '../../snapshots/3e59e30f6c4a1f0af569482c391acf861c88c70a0f5cf1940d06c526b0a18938/contract.json' with { type: 'json' };
 import { Migration, MigrationCLI, col, fn, lit, primaryKey } from '@prisma/orm-postgres/migration';
 
-export default class M extends Migration<Start, End> {
-  override readonly startContractJson = startContract;
+// The baseline for this project. `from` is null in migration.json because there
+// is nothing to come from: applying this to an empty database builds the whole
+// schema. It previously followed two scaffold migrations left over from the
+// starter template, one of which created a `role` enum of its own. Replaying
+// that chain against a clean database therefore failed with `type "role"
+// already exists`, so a reviewer provisioning their own database could not get
+// started at all. See `bun run verify:clean-database`.
+export default class M extends Migration<never, End> {
   override readonly endContractJson = endContract;
 
   override get operations() {
