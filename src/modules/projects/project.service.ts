@@ -8,6 +8,7 @@ import type {
 	UserContext,
 } from "../authorization/authorization.types";
 import { computeTaskBlockingStates } from "../dependencies/dependency.service";
+import type { TaskBlockingState } from "../dependencies/dependency.types";
 import { toProjectResponse } from "./project.dto";
 import {
 	ProjectAccessDeniedError,
@@ -35,6 +36,7 @@ import {
 import type {
 	Pagination,
 	ProjectActivityResponse,
+	ProjectDepartmentMetrics,
 	ProjectListResponse,
 	ProjectMemberRecord,
 	ProjectMemberResponse,
@@ -521,37 +523,100 @@ async function countProjectTasks(
 		countByStatus("TODO"),
 	]);
 
-	return {
-		total,
-		completed,
-		inProgress,
-		todo,
-		blocked: await countBlockedProjectTasks(projectId),
-	};
+	return { total, completed, inProgress, todo, blocked: 0 };
+}
 
-	/**
-	 * A task is blocked when a prerequisite is unfinished, which is a property of
-	 * the dependency graph rather than of the stored status: the status is only
-	 * rewritten to BLOCKED in some paths, so counting that column would report
-	 * zero for work that genuinely cannot start. The same graph function the task
-	 * list and the client dashboard use decides this.
-	 */
-	async function countBlockedProjectTasks(id: string): Promise<number> {
-		const taskIds = await db.orm.public.Tasks.where((task) =>
-			task.projectId.eq(id),
-		)
-			.where((task) => task.deletedAt.isNull())
-			.select("id")
-			.all();
-		if (taskIds.length === 0) {
-			return 0;
-		}
-		const states = await computeTaskBlockingStates(
-			id,
-			taskIds.map((task) => task.id),
-		);
-		return [...states.values()].filter((state) => state.blocked).length;
+/**
+ * The project's calculated block state, keyed by task id.
+ *
+ * Resolved once and reused by both the totals and the per-department breakdown,
+ * so the two cannot disagree about which tasks are blocked and the graph is only
+ * walked a single time.
+ */
+async function resolveProjectBlockingStates(
+	projectId: string,
+): Promise<Map<string, TaskBlockingState>> {
+	const taskIds = await db.orm.public.Tasks.where((task) =>
+		task.projectId.eq(projectId),
+	)
+		.where((task) => task.deletedAt.isNull())
+		.select("id")
+		.all();
+	if (taskIds.length === 0) {
+		return new Map();
 	}
+	return computeTaskBlockingStates(
+		projectId,
+		taskIds.map((task) => task.id),
+	);
+}
+
+function countBlockedStates(
+	states: ReadonlyMap<string, TaskBlockingState>,
+): number {
+	return [...states.values()].filter((state) => state.blocked).length;
+}
+
+/**
+ * Counts per task-owning department.
+ *
+ * The blocked figure comes from the resolved graph rather than a per-department
+ * query, so it matches the project total exactly. Departments with no live task
+ * are left out entirely instead of being reported as a row of zeroes, which would
+ * imply a team is attached to work that does not exist.
+ */
+async function countProjectTasksByDepartment(
+	projectId: string,
+	blockingStates: ReadonlyMap<string, TaskBlockingState>,
+): Promise<ProjectDepartmentMetrics[]> {
+	const rows = await db.orm.public.Tasks.where((task) =>
+		task.projectId.eq(projectId),
+	)
+		.where((task) => task.deletedAt.isNull())
+		.all();
+
+	const buckets = new Map<string, ProjectDepartmentMetrics>();
+	for (const task of rows) {
+		const department = String(task.department);
+		let bucket = buckets.get(department);
+		if (bucket === undefined) {
+			bucket = {
+				department,
+				total: 0,
+				completed: 0,
+				inProgress: 0,
+				todo: 0,
+				blocked: 0,
+				progressPercentage: 0,
+			};
+			buckets.set(department, bucket);
+		}
+		bucket.total += 1;
+		if (task.status === "DONE") {
+			bucket.completed += 1;
+		}
+		if (task.status === "IN_PROGRESS") {
+			bucket.inProgress += 1;
+		}
+		if (task.status === "TODO") {
+			bucket.todo += 1;
+		}
+		if (blockingStates.get(task.id)?.blocked === true) {
+			bucket.blocked += 1;
+		}
+	}
+
+	return (
+		[...buckets.values()]
+			.map((bucket) => ({
+				...bucket,
+				progressPercentage: computeProjectProgressPercentage(bucket),
+			}))
+			// A stable order keeps the dashboard from reshuffling between requests.
+			.sort((first, second) =>
+				first.department.localeCompare(second.department),
+			)
+	);
 }
 
 /**
@@ -575,12 +640,33 @@ export async function getProjectMetrics(
 	projectId: string,
 ): Promise<ProjectMetricsResponse> {
 	const project = await requireReadableProject(user, projectId);
-	const tasks = await countProjectTasks(project.id);
+
+	// The status counts and the dependency graph are resolved independently and
+	// then combined, so the blocked figure and the per-department breakdown come
+	// from one walk of the graph rather than one each.
+	const [statusCounts, blockingStates] = await Promise.all([
+		countProjectTasks(project.id),
+		resolveProjectBlockingStates(project.id),
+	]);
+	const tasks: ProjectTaskMetrics = {
+		...statusCounts,
+		// A task is blocked when a prerequisite is unfinished, which is a property
+		// of the dependency graph rather than of the stored status: the status is
+		// only rewritten to BLOCKED in some paths, so counting that column would
+		// report zero for work that genuinely cannot start. The same graph
+		// function the task list and the client dashboard use decides this.
+		blocked: countBlockedStates(blockingStates),
+	};
+	const byDepartment = await countProjectTasksByDepartment(
+		project.id,
+		blockingStates,
+	);
 
 	return {
 		projectId: project.id,
 		progress: { percentage: computeProjectProgressPercentage(tasks) },
 		tasks,
+		byDepartment,
 	};
 }
 

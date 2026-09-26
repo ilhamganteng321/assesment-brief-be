@@ -1387,6 +1387,96 @@ async function verifyDependencyApi(
 		`isBlocked=${String(jsonPath(designDetail, ["data", "task", "isBlocked"]))}`,
 	);
 
+	// --- the isBlocked filter, so a dashboard card can link to a real page --
+	// `isBlocked` is derived from the graph rather than stored, so the filter has
+	// to be resolved before paging. These checks pin that it agrees with the
+	// per-row flag, which is what makes the two usable together.
+	const flatBlocked = await api(
+		`/tasks?filters=${JSON.stringify({ projectId: depProjectId, isBlocked: true })}&rows=100`,
+		{ token: tokenPm },
+	);
+	const flatUnblocked = await api(
+		`/tasks?filters=${JSON.stringify({ projectId: depProjectId, isBlocked: false })}&rows=100`,
+		{ token: tokenPm },
+	);
+	const flatBlockedRows =
+		jsonPath<{ id: string; isBlocked: boolean }[]>(flatBlocked, [
+			"data",
+			"tasks",
+		]) ?? [];
+	const flatUnblockedRows =
+		jsonPath<{ id: string; isBlocked: boolean }[]>(flatUnblocked, [
+			"data",
+			"tasks",
+		]) ?? [];
+	record(
+		"dependencies: filtering by isBlocked=true returns only blocked tasks",
+		flatBlocked.status === 200 &&
+			flatBlockedRows.length > 0 &&
+			flatBlockedRows.every((task) => task.isBlocked === true) &&
+			flatBlockedRows.some((task) => task.id === frontendId),
+		`status=${flatBlocked.status} count=${flatBlockedRows.length} ids=${JSON.stringify(
+			flatBlockedRows.map((task) => task.id),
+		)}`,
+	);
+	record(
+		"dependencies: filtering by isBlocked=false returns only unblocked tasks",
+		flatUnblocked.status === 200 &&
+			flatUnblockedRows.every((task) => task.isBlocked === false) &&
+			!flatUnblockedRows.some((task) => task.id === frontendId),
+		`status=${flatUnblocked.status} count=${flatUnblockedRows.length}`,
+	);
+	// The unfiltered project total, so the two filtered pages can be checked for
+	// completeness rather than only for correctness of their contents.
+	const unfilteredProject = await api(
+		`/tasks?filters=${JSON.stringify({ projectId: depProjectId })}&rows=100`,
+		{ token: tokenPm },
+	);
+	const unfilteredProjectTotal =
+		jsonPath<number>(unfilteredProject, ["data", "pagination", "total"]) ?? -1;
+	record(
+		"dependencies: the two isBlocked pages partition the project exactly",
+		flatBlockedRows.length + flatUnblockedRows.length ===
+			unfilteredProjectTotal,
+		`blocked=${flatBlockedRows.length} unblocked=${flatUnblockedRows.length} total=${unfilteredProjectTotal}`,
+	);
+	const flatBlockedCount = jsonPath<number>(flatBlocked, [
+		"data",
+		"pagination",
+		"total",
+	]);
+	record(
+		"dependencies: the isBlocked page count is the server total, not the page size",
+		flatBlockedCount === flatBlockedRows.length,
+		`total=${String(flatBlockedCount)} rows=${flatBlockedRows.length}`,
+	);
+	// The nested project-scoped list carries the same filter.
+	const nestedBlocked = await api(
+		`/projects/${depProjectId}/tasks?isBlocked=true`,
+		{ token: tokenPm },
+	);
+	const nestedBlockedRows =
+		jsonPath<{ id: string; isBlocked: boolean }[]>(nestedBlocked, [
+			"data",
+			"tasks",
+		]) ?? [];
+	record(
+		"dependencies: the nested task list supports isBlocked too",
+		nestedBlocked.status === 200 &&
+			nestedBlockedRows.length > 0 &&
+			nestedBlockedRows.every((task) => task.isBlocked === true),
+		`status=${nestedBlocked.status} count=${nestedBlockedRows.length}`,
+	);
+	const badBlocked = await api(
+		`/tasks?filters=${JSON.stringify({ isBlocked: "maybe" })}`,
+		{ token: tokenPm },
+	);
+	record(
+		"dependencies: a non-boolean isBlocked filter is rejected",
+		badBlocked.status === 400,
+		`status=${badBlocked.status}`,
+	);
+
 	// --- the start guard, reached by bypassing the UI entirely ---------------
 	const blockedStart = await api(`/tasks/${frontendId}`, {
 		method: "PATCH",
@@ -2838,6 +2928,74 @@ async function verifyProjectDashboard(
 			(key) => typeof counts[key] === "number" && (counts[key] ?? -1) >= 0,
 		),
 		`tasks=${JSON.stringify(counts)}`,
+	);
+
+	// --- per-department breakdown --------------------------------------------
+	const byDepartment = (pmPayload?.["byDepartment"] ?? []) as Array<
+		Record<string, unknown>
+	>;
+	record(
+		"dashboard: the metrics break the project down by department",
+		Array.isArray(byDepartment) && byDepartment.length > 0,
+		`byDepartment=${JSON.stringify(byDepartment)}`,
+	);
+	record(
+		"dashboard: each department row carries counts and a server percentage",
+		Array.isArray(byDepartment) &&
+			byDepartment.every(
+				(row) =>
+					typeof row["department"] === "string" &&
+					["total", "completed", "inProgress", "todo", "blocked"].every(
+						(key) => typeof row[key] === "number",
+					) &&
+					typeof row["progressPercentage"] === "number" &&
+					row["progressPercentage"] >= 0 &&
+					(row["progressPercentage"] as number) <= 100,
+			),
+		`rows=${JSON.stringify(byDepartment)}`,
+	);
+	record(
+		"dashboard: a department's own percentage matches its own counts",
+		Array.isArray(byDepartment) &&
+			byDepartment.every((row) => {
+				const total = (row["total"] as number) ?? 0;
+				const completed = (row["completed"] as number) ?? 0;
+				return (
+					row["progressPercentage"] ===
+					(total === 0 ? 0 : Math.round((completed / total) * 100))
+				);
+			}),
+		`rows=${JSON.stringify(byDepartment)}`,
+	);
+	// The per-department figures have to reconcile with the project total, or the
+	// dashboard would show two different stories about the same project.
+	record(
+		"dashboard: the department breakdown reconciles with the project total",
+		Array.isArray(byDepartment) &&
+			byDepartment.reduce(
+				(sum, row) => sum + ((row["total"] as number) ?? 0),
+				0,
+			) === countOf("total") &&
+			byDepartment.reduce(
+				(sum, row) => sum + ((row["completed"] as number) ?? 0),
+				0,
+			) === countOf("completed") &&
+			byDepartment.reduce(
+				(sum, row) => sum + ((row["blocked"] as number) ?? 0),
+				0,
+			) === countOf("blocked"),
+		`deptTotal=${String(
+			byDepartment.reduce(
+				(sum, row) => sum + ((row["total"] as number) ?? 0),
+				0,
+			),
+		)} metricsTotal=${String(countOf("total"))}`,
+	);
+	record(
+		"dashboard: no department with zero tasks is reported",
+		Array.isArray(byDepartment) &&
+			byDepartment.every((row) => ((row["total"] as number) ?? 0) > 0),
+		`rows=${JSON.stringify(byDepartment)}`,
 	);
 	record(
 		"dashboard: progress is a server-computed whole percentage",

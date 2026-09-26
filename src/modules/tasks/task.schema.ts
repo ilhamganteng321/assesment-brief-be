@@ -119,6 +119,8 @@ export const taskListQuerySchema = z.strictObject({
 	status: statusSchema.optional(),
 	assignedToId: assignedToIdSchema.optional(),
 	clientVisible: clientVisibleQuerySchema,
+	/** Derived from the dependency graph; see the flat list for the rationale. */
+	isBlocked: clientVisibleQuerySchema,
 });
 
 export const projectIdParamSchema = z.strictObject({
@@ -138,6 +140,12 @@ export const TASK_FILTER_FIELDS = [
 	"priority",
 	"department",
 	"clientVisible",
+	/**
+	 * A derived predicate, not a column: `isBlocked` is calculated from the
+	 * dependency graph, so filtering on it is applied in the service after the
+	 * graph has been resolved rather than pushed into the SQL predicate.
+	 */
+	"isBlocked",
 ] as const;
 
 export const TASK_SEARCH_FIELDS = ["title", "description"] as const;
@@ -181,6 +189,7 @@ const taskListQueryFactory = createListQuerySchema({
 		priority: enumArrayValueSchema(TASK_PRIORITIES),
 		department: enumArrayValueSchema(TASK_DEPARTMENTS),
 		clientVisible: clientVisibleFilterValueSchema,
+		isBlocked: clientVisibleFilterValueSchema,
 	},
 	defaultRows: DEFAULT_TASK_ROWS,
 	maxRows: MAX_TASK_ROWS,

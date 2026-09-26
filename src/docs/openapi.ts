@@ -557,7 +557,7 @@ export const openApiDocument = {
 				tags: ["Projects"],
 				summary: "Get project task metrics",
 				description:
-					"Requires a Bearer JWT and project visibility (PM, INTERNAL). Every count is a database aggregate, so the dashboard never derives a total in the browser. `blocked` is derived from the dependency graph rather than the stored BLOCKED status, because a task whose prerequisite is unfinished has not had its status rewritten. Progress is the share of completed tasks, computed by the server. Not available to a client guest, who reads the scoped `/client` payloads instead.",
+					"Requires a Bearer JWT and project visibility (PM, INTERNAL). Every count is a database aggregate, so the dashboard never derives a total in the browser. `blocked` is derived from the dependency graph rather than the stored BLOCKED status, because a task whose prerequisite is unfinished has not had its status rewritten. Progress is the share of completed tasks, computed by the server. `byDepartment` breaks the same figures down per task-owning department and reconciles exactly with the totals. Not available to a client guest, who reads the scoped `/client` payloads instead.",
 				operationId: "getProjectMetrics",
 				security: bearerSecurity,
 				parameters: [projectIdParam("Project id")],
@@ -655,7 +655,7 @@ export const openApiDocument = {
 				tags: ["Tasks"],
 				summary: "List tasks",
 				description:
-					"Requires a Bearer JWT and task access in the project. Supports pagination, searching by title, and filtering by status, assignee, and client visibility.",
+					"Requires a Bearer JWT and task access in the project. Supports pagination, searching by title, and filtering by status, assignee, client visibility, and calculated block state.",
 				operationId: "listTasks",
 				security: bearerSecurity,
 				parameters: [
@@ -689,6 +689,14 @@ export const openApiDocument = {
 						required: false,
 						schema: { type: "boolean" },
 						description: "Filter by client visibility",
+					},
+					{
+						name: "isBlocked",
+						in: "query",
+						required: false,
+						schema: { type: "boolean" },
+						description:
+							"Filter by calculated block state. This is derived from the dependency graph rather than a stored column, so it is resolved before counting and paging: the reported total is the number of matching tasks, not the size of the page.",
 					},
 				],
 				responses: {
@@ -1576,8 +1584,39 @@ export const openApiDocument = {
 							"Share of completed tasks as a whole percentage, computed by the server so the client never introduces its own progress rule.",
 					},
 					tasks: ref("ProjectTaskMetrics"),
+					byDepartment: {
+						type: "array",
+						items: ref("ProjectDepartmentMetrics"),
+						description:
+							"Per-department counts. The figures reconcile exactly with the project totals, and a department owning no live task is omitted rather than reported as a row of zeroes. Not exposed to a client guest.",
+					},
 				},
-				required: ["projectId", "progress", "tasks"],
+				required: ["projectId", "progress", "tasks", "byDepartment"],
+			},
+			ProjectDepartmentMetrics: {
+				type: "object",
+				properties: {
+					department: ref("TaskDepartment"),
+					total: { type: "integer" },
+					completed: { type: "integer" },
+					inProgress: { type: "integer" },
+					todo: { type: "integer" },
+					blocked: { type: "integer" },
+					progressPercentage: {
+						type: "integer",
+						description:
+							"Completed share for this department alone, computed by the server.",
+					},
+				},
+				required: [
+					"department",
+					"total",
+					"completed",
+					"inProgress",
+					"todo",
+					"blocked",
+					"progressPercentage",
+				],
 			},
 			ProjectActivityEntry: {
 				type: "object",

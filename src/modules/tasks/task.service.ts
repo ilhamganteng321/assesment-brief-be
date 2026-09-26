@@ -213,6 +213,45 @@ async function assertValidAssignee(
 	};
 }
 
+/**
+ * Narrows a collection to the tasks whose calculated block state matches.
+ *
+ * `isBlocked` is a property of the dependency graph rather than a column, so it
+ * cannot become part of the SQL predicate. The graph is resolved for the rows the
+ * other predicates already selected, and the survivors are pushed back down as an
+ * `id IN (...)` restriction. Counting and paging therefore still happen in the
+ * database against the narrowed set, rather than over a page the browser would
+ * have to filter for itself.
+ */
+async function applyIsBlockedFilter(
+	collection: ReturnType<typeof db.orm.public.Tasks.where>,
+	projectId: string,
+	isBlocked: boolean | undefined,
+	visibleOnly: boolean,
+): Promise<typeof collection> {
+	if (isBlocked === undefined) {
+		return collection;
+	}
+
+	const candidates = await collection.select("id").all();
+	if (candidates.length === 0) {
+		return collection;
+	}
+
+	const states = await computeTaskBlockingStates(
+		projectId,
+		candidates.map((task) => task.id),
+		{ visibleOnly },
+	);
+	const matching = candidates
+		.map((task) => task.id)
+		.filter((taskId) => (states.get(taskId)?.blocked ?? false) === isBlocked);
+
+	// An empty match still has to narrow the collection, otherwise the filter
+	// would be silently ignored and the unfiltered page returned instead.
+	return collection.where((task) => task.id.in(matching));
+}
+
 export async function listTasks(
 	user: UserContext,
 	projectId: string,
@@ -262,16 +301,23 @@ export async function listTasks(
 		);
 	}
 
-	const countResult = await collection.aggregate((aggregate) => ({
+	const visibleOnly = user.role === "CLIENT";
+	const filtered = await applyIsBlockedFilter(
+		collection,
+		project.id,
+		query.isBlocked,
+		visibleOnly,
+	);
+
+	const countResult = await filtered.aggregate((aggregate) => ({
 		total: aggregate.count(),
 	}));
-	const tasks = await collection
+	const tasks = await filtered
 		.orderBy((task) => task.createdAt.desc())
 		.limit(limit)
 		.offset((page - 1) * limit)
 		.all();
 
-	const visibleOnly = user.role === "CLIENT";
 	const blockingStates = await computeTaskBlockingStates(
 		project.id,
 		tasks.map((task) => task.id),
@@ -865,12 +911,43 @@ export async function listAllTasks(
 		}
 	}
 
-	const countResult = await collection.aggregate((aggregate) => ({
+	// `isBlocked` is graph-derived, so it is resolved before counting and paging
+	// rather than being left to the caller. The graph is per project, so each
+	// project's candidates are narrowed on their own and merged back together.
+	const isBlockedFilter = filters.isBlocked as boolean | undefined;
+	let filtered = collection;
+	if (isBlockedFilter !== undefined) {
+		const candidateIdsByProject = new Map<string, string[]>();
+		for (const task of await collection.select("id", "projectId").all()) {
+			const bucket = candidateIdsByProject.get(task.projectId);
+			if (bucket === undefined) {
+				candidateIdsByProject.set(task.projectId, [task.id]);
+			} else {
+				bucket.push(task.id);
+			}
+		}
+
+		const matchingIds: string[] = [];
+		for (const [candidateProjectId, candidateIds] of candidateIdsByProject) {
+			const states = await computeTaskBlockingStates(
+				candidateProjectId,
+				candidateIds,
+			);
+			for (const candidateId of candidateIds) {
+				if ((states.get(candidateId)?.blocked ?? false) === isBlockedFilter) {
+					matchingIds.push(candidateId);
+				}
+			}
+		}
+		filtered = collection.where((task) => task.id.in(matchingIds));
+	}
+
+	const countResult = await filtered.aggregate((aggregate) => ({
 		total: aggregate.count(),
 	}));
 
 	const orderKey = query.orderKey ?? "createdAt";
-	const tasks = await collection
+	const tasks = await filtered
 		.orderBy((task) =>
 			orderRule === "asc" ? task[orderKey].asc() : task[orderKey].desc(),
 		)

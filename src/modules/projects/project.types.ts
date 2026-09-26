@@ -74,6 +74,18 @@ export type ProjectProgress = {
 	percentage: number;
 };
 
+/** One task-owning department's counts within the project. */
+export type ProjectDepartmentMetrics = {
+	department: string;
+	total: number;
+	completed: number;
+	inProgress: number;
+	todo: number;
+	blocked: number;
+	/** Completed share as a whole percentage, computed by the server. */
+	progressPercentage: number;
+};
+
 /**
  * The aggregate view a project dashboard needs. Every number is produced by the
  * server so the client never has to invent a business rule for progress, and the
@@ -83,6 +95,14 @@ export type ProjectMetricsResponse = {
 	projectId: string;
 	progress: ProjectProgress;
 	tasks: ProjectTaskMetrics;
+	/**
+	 * Per-department breakdown, computed from the same aggregates as the totals.
+	 *
+	 * Departments that own no live task are omitted rather than reported as zero,
+	 * so a client cannot infer that a team exists in the project from an empty
+	 * row. The client guest never receives this at all.
+	 */
+	byDepartment: ProjectDepartmentMetrics[];
 };
 
 /** One recent change, projected for a project-level activity feed. */
