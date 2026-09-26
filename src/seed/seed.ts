@@ -7,6 +7,11 @@ import type { TaskAuditSnapshot } from "../modules/audit/audit.types";
 import { hashPassword } from "../modules/auth/password";
 import { db } from "../prisma/db";
 import { toVarchar } from "../prisma/scalars";
+import {
+	DEFAULT_DEMO_PASSWORD,
+	type SeedAccount,
+	withPmCredentials,
+} from "./seed.accounts";
 
 // ---------------------------------------------------------------------------
 // Deterministic identifiers for the demo project. Re-running the seed is
@@ -34,60 +39,7 @@ const ATTACHMENT_IDS = {
 	backendApiPlan: "88888888-8888-4888-8888-888888880002",
 } as const;
 
-const DEFAULT_DEMO_PASSWORD = "DemoPass#2026";
-
 const VALID_PASSWORD_RE = /^.{8,72}$/;
-
-type SeedAccount = {
-	readonly name: string;
-	readonly email: string;
-	readonly password: string;
-	readonly role: "PM" | "INTERNAL" | "CLIENT";
-	readonly department: "PRODUCT" | "UI_UX" | "FRONTEND" | "BACKEND" | "CLIENT";
-};
-
-function buildAccounts(
-	overrideEmail: string | undefined,
-	overridePassword: string | undefined,
-): SeedAccount[] {
-	return [
-		{
-			name: "Priya Sharma",
-			email: overrideEmail ?? "pm@aurora.demo",
-			password: overridePassword ?? DEFAULT_DEMO_PASSWORD,
-			role: "PM",
-			department: "PRODUCT",
-		},
-		{
-			name: "Leo Nguyen",
-			email: "uiux@aurora.demo",
-			password: DEFAULT_DEMO_PASSWORD,
-			role: "INTERNAL",
-			department: "UI_UX",
-		},
-		{
-			name: "Maya Chen",
-			email: "frontend@aurora.demo",
-			password: DEFAULT_DEMO_PASSWORD,
-			role: "INTERNAL",
-			department: "FRONTEND",
-		},
-		{
-			name: "Tomas Oliveira",
-			email: "backend@aurora.demo",
-			password: DEFAULT_DEMO_PASSWORD,
-			role: "INTERNAL",
-			department: "BACKEND",
-		},
-		{
-			name: "Grace Kim",
-			email: "client@aurora.demo",
-			password: DEFAULT_DEMO_PASSWORD,
-			role: "CLIENT",
-			department: "CLIENT",
-		},
-	];
-}
 
 type TaskSeed = {
 	readonly id: string;
@@ -325,10 +277,7 @@ async function main(): Promise<number> {
 		return 1;
 	}
 
-	const accounts = buildAccounts(
-		argEmail === undefined ? undefined : argEmail,
-		argPassword === undefined ? undefined : argPassword,
-	);
+	const accounts = withPmCredentials(argEmail, argPassword);
 
 	try {
 		await db.orm.public.Users.aggregate((aggregate) => ({

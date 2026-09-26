@@ -17,7 +17,13 @@ const emailSchema = z
 
 const departmentSchema = z.enum(DEPARTMENTS);
 
-export const registerSchema = z.object({
+// Both schemas are strict so that an unexpected key is reported rather than
+// silently dropped. A plain `z.object()` would quietly discard `role`, which is
+// safe today only because the service hard-codes the new account's role; a
+// reviewer submitting `role: "PM"` deserves to be told the field does not exist
+// instead of receiving a success. This also matches the task endpoints, which
+// already reject unknown keys.
+export const registerSchema = z.strictObject({
 	name: z
 		.string()
 		.trim()
@@ -33,7 +39,7 @@ export const registerSchema = z.object({
 
 export type RegisterInput = z.infer<typeof registerSchema>;
 
-export const loginSchema = z.object({
+export const loginSchema = z.strictObject({
 	email: emailSchema,
 	password: z.string().min(1, "Password is required"),
 });

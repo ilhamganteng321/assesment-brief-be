@@ -257,6 +257,13 @@ export async function listTasks(
 	projectId: string,
 	query: TaskListQuery,
 ): Promise<TaskListResponse> {
+	// These are the internal routes. A client guest who is a project member
+	// would otherwise pass the membership check below and receive the full
+	// internal projection, which carries the assignee id, department, priority,
+	// version and the dependency graph. Clients read through `/client/*`, which
+	// narrows the query and projects a sanitised shape.
+	assertInternalTaskApiAccess(user);
+
 	const project = await findVisibleProject(projectId);
 	if (!project) {
 		throw new ProjectNotFoundError();
@@ -342,6 +349,10 @@ export async function getTask(
 	projectId: string,
 	taskId: string,
 ): Promise<TaskResponse> {
+	// See `listTasks`: the internal read surface is not for client guests, even
+	// one that belongs to the project.
+	assertInternalTaskApiAccess(user);
+
 	const project = await findVisibleProject(projectId);
 	if (!project) {
 		throw new ProjectNotFoundError();

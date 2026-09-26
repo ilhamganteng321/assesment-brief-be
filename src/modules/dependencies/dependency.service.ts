@@ -330,6 +330,17 @@ export async function listDependencies(
 	projectId: string,
 	taskId: string,
 ): Promise<DependencyTaskSummary[]> {
+	// Dependency reads belong to the internal surface, like the task reads they
+	// hang off. A client guest who is a member of the project would otherwise
+	// pass the check below and receive prerequisite titles and statuses from a
+	// route the client portal does not expose. The portal already shows every
+	// client-visible task, so nothing is lost by keeping this closed.
+	if (user.role === "CLIENT") {
+		throw new DependencyAccessDeniedError(
+			"Task dependencies are only available to internal team members",
+		);
+	}
+
 	const project = await requireVisibleProject(projectId);
 	const memberIds = await loadMemberIds(project.id);
 	const projectContext = toProjectContext(project, memberIds);
@@ -348,7 +359,6 @@ export async function listDependencies(
 		);
 	}
 
-	const visibleOnly = user.role === "CLIENT";
 	const { tasks, edges } = await loadGraph(project.id);
 	const taskById = new Map(tasks.map((task) => [task.id, task]));
 	const dependencies: DependencyTaskSummary[] = [];
@@ -361,13 +371,9 @@ export async function listDependencies(
 		if (dependencyTask === undefined) {
 			continue;
 		}
-		// A client guest sees neither internal nor deleted prerequisites.
-		if (
-			visibleOnly &&
-			(!dependencyTask.clientVisible || isDeleted(dependencyTask))
-		) {
-			continue;
-		}
+		// A soft deleted prerequisite is still listed, flagged `deleted`, because
+		// the edge survives the task and hiding it would make the graph look
+		// resolvable when it is not.
 		dependencies.push(toSummary(dependencyTask));
 	}
 

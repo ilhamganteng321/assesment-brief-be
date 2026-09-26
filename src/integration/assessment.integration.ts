@@ -1922,9 +1922,14 @@ async function verifyDependencyApi(
 		jsonPath<Array<{ id: string }>>(clientList, ["data", "dependencies"]) ?? []
 	).map((row) => row.id);
 	record(
-		"dependencies: the client never sees an internal prerequisite",
-		clientList.status === 200 &&
-			!clientIds.includes(internalPrereq.id) &&
+		"dependencies: a client never reaches the internal dependency graph",
+		// Dependency reads are part of the internal surface, so a client guest is
+		// refused outright. It previously received 200 with internal
+		// prerequisites filtered out, which held for this fixture but still
+		// exposed an internal route to the client role.
+		clientList.status === 403 &&
+			jsonPath(clientList, ["error", "code"]) === "DEPENDENCY_ACCESS_DENIED" &&
+			!clientList.text.includes(internalPrereq.id) &&
 			clientIds.length === 0,
 		`status=${clientList.status} count=${clientIds.length}`,
 	);
@@ -2716,9 +2721,15 @@ async function verifyAuditTrail(
 			body: { oldValue: "forged", newValue: "forged" },
 		});
 		record(
-			`audit: ${method} on the audit log is not a route (append-only surface)`,
-			attempted.status === 404 || attempted.status === 405,
-			`status=${attempted.status}`,
+			`audit: ${method} on the audit log is refused (append-only surface)`,
+			// The router registers an explicit immutability guard for each
+			// mutating verb, so the refusal is 403 AUDIT_ACCESS_DENIED rather
+			// than the 404/405 a merely-absent route would produce.
+			attempted.status === 403 &&
+				jsonPath(attempted, ["error", "code"]) === "AUDIT_ACCESS_DENIED",
+			`status=${attempted.status} code=${String(
+				jsonPath(attempted, ["error", "code"]),
+			)}`,
 		);
 	}
 

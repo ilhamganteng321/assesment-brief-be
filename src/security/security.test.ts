@@ -21,6 +21,7 @@ import {
 } from "../middleware/rate-limit";
 import type { RequestIdVariables } from "../middleware/request-id";
 import { requestId } from "../middleware/request-id";
+import { securityHeaders } from "../middleware/security";
 import {
 	attachmentListQuerySchema,
 	detectAttachmentMimeType,
@@ -217,7 +218,54 @@ describe("security: security headers and CORS", () => {
 		expect(res.headers.get("Content-Security-Policy")).toContain(
 			"frame-ancestors 'none'",
 		);
+		expect(res.headers.get("X-Permitted-Cross-Domain-Policies")).toBe("none");
 		expect(res.status).toBe(200);
+	});
+
+	// HSTS is only meaningful once the API is served over TLS, so it is gated on
+	// production. Asserted against a throwaway app, and the shared `env` is
+	// restored afterwards because every other suite imports the same object.
+	test("sends HSTS only in production", async () => {
+		const originalNodeEnv = env.NODE_ENV;
+		try {
+			env.NODE_ENV = "production";
+			const productionApp = new Hono();
+			productionApp.use("*", securityHeaders);
+			productionApp.get("/probe", (c) => c.json({ ok: true }));
+
+			const response = await productionApp.request("/probe");
+			expect(response.headers.get("Strict-Transport-Security")).toBe(
+				"max-age=63072000; includeSubDomains",
+			);
+		} finally {
+			env.NODE_ENV = originalNodeEnv;
+		}
+
+		const development = await app.request("/health");
+		expect(development.headers.get("Strict-Transport-Security")).toBeNull();
+	});
+
+	// The API reference is the one page that has to load remote assets, so it
+	// carries a relaxed policy. Everything else keeps the strict one.
+	test("the docs page is the only relaxed CSP", async () => {
+		const docs = await app.request("/docs");
+		const policy = docs.headers.get("Content-Security-Policy") ?? "";
+		expect(policy).not.toContain("default-src 'none'");
+		expect(policy).toContain("script-src");
+		// Even the relaxed policy must not allow framing.
+		expect(policy).toContain("frame-ancestors 'none'");
+
+		const spec = await app.request("/openapi.json");
+		expect(spec.headers.get("Content-Security-Policy")).toContain(
+			"default-src 'none'",
+		);
+	});
+
+	test("every response carries a request id for correlation", async () => {
+		const res = await app.request("/health");
+		expect(res.headers.get("X-Request-ID")).toMatch(
+			/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+		);
 	});
 
 	test("CORS allows a configured frontend origin", async () => {
@@ -477,11 +525,49 @@ describe("security: authorization and data isolation", () => {
 		).toBe(false);
 	});
 
-	test("audit routes expose only read endpoints", () => {
-		const methods = new Set(auditRoutes.routes.map((route) => route.method));
+	test("audit routes serve a read and explicitly refuse every write", () => {
+		const registrations = auditRoutes.routes.map((route) => ({
+			method: route.method,
+			path: route.path,
+		}));
+		const methods = new Set(registrations.map((route) => route.method));
 		expect(methods.has("GET")).toBe(true);
+
+		// Anything beyond the read has to be one of the deliberate rejections
+		// registered to keep the log append-only, never a handler that writes.
 		for (const method of methods) {
-			expect(["ALL", "GET"].includes(method)).toBe(true);
+			expect(["ALL", "GET", "POST", "PUT", "PATCH", "DELETE"]).toContain(
+				method,
+			);
+		}
+		for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+			expect(methods.has(method)).toBe(true);
+		}
+
+		// The rejection is scoped to the audit path. This router is mounted at
+		// `/projects`, so a `*` catch-all would also swallow the attachment,
+		// dependency and task routes sharing that prefix.
+		for (const route of registrations) {
+			if (["POST", "PUT", "PATCH", "DELETE"].includes(route.method)) {
+				expect(route.path).toBe("/:projectId/tasks/:taskId/audit-logs");
+			}
+		}
+	});
+
+	test("a write attempt against the audit log never reaches a handler", async () => {
+		const path =
+			"/projects/11111111-1111-4111-8111-111111111111/tasks/22222222-2222-4222-8222-222222222222/audit-logs";
+
+		// Authentication is still required, so an anonymous write is turned away
+		// before anything else. The authenticated case is covered by
+		// `tests/audit`, which asserts the explicit rejection.
+		const anonymous = await app.request(path, { method: "DELETE" });
+		expect(anonymous.status).toBe(401);
+
+		// The rejection is registered for every mutating verb, not just DELETE.
+		const methods = new Set(auditRoutes.routes.map((route) => route.method));
+		for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+			expect(methods.has(method)).toBe(true);
 		}
 	});
 

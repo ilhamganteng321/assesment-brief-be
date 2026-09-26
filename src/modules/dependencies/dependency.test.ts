@@ -5,6 +5,14 @@ import type {
 	UserContext,
 } from "../authorization/authorization.types";
 import {
+	CircularDependencyError,
+	CrossProjectDependencyError,
+	DependencyAccessDeniedError,
+	DependencyAlreadyExistsError,
+	DependencyNotFoundError,
+	SelfDependencyError,
+} from "./dependency.errors";
+import {
 	canCreateDependency,
 	canDeleteDependency,
 	canViewDependencies,
@@ -421,4 +429,25 @@ describe("blocking state derivation", () => {
 
 		expect(state).toEqual({ blocked: false, blockedBy: [] });
 	});
+});
+
+describe("dependency error contract", () => {
+	// Each violation has to answer with a status the client can branch on and a
+	// stable code, so these are pinned rather than left to the HttpError default.
+	const expectations = [
+		[new SelfDependencyError(), 400, "SELF_DEPENDENCY"],
+		[new CrossProjectDependencyError(), 400, "CROSS_PROJECT_DEPENDENCY"],
+		[new DependencyAccessDeniedError(), 403, "DEPENDENCY_ACCESS_DENIED"],
+		[new DependencyNotFoundError(), 404, "DEPENDENCY_NOT_FOUND"],
+		[new DependencyAlreadyExistsError(), 409, "DEPENDENCY_ALREADY_EXISTS"],
+		[new CircularDependencyError(), 409, "CIRCULAR_DEPENDENCY"],
+	] as const;
+
+	for (const [error, status, code] of expectations) {
+		test(`${code} is a ${status}`, () => {
+			expect(error.status).toBe(status);
+			expect(error.code).toBe(code);
+			expect(error.message.length).toBeGreaterThan(0);
+		});
+	}
 });
