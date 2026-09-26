@@ -521,6 +521,13 @@
                   "kind": "scalar"
                 }
               },
+              "createdBy": {
+                "nullable": true,
+                "type": {
+                  "codecId": "pg/uuid@1",
+                  "kind": "scalar"
+                }
+              },
               "dependencyTaskId": {
                 "nullable": false,
                 "type": {
@@ -544,6 +551,22 @@
               }
             },
             "relations": {
+              "createdByUser": {
+                "cardinality": "N:1",
+                "nullable": true,
+                "on": {
+                  "localFields": [
+                    "createdBy"
+                  ],
+                  "targetFields": [
+                    "id"
+                  ]
+                },
+                "to": {
+                  "model": "Users",
+                  "namespace": "public"
+                }
+              },
               "dependencyTask": {
                 "cardinality": "N:1",
                 "nullable": false,
@@ -581,6 +604,9 @@
               "fields": {
                 "createdAt": {
                   "column": "created_at"
+                },
+                "createdBy": {
+                  "column": "created_by"
                 },
                 "dependencyTaskId": {
                   "column": "dependency_task_id"
@@ -956,6 +982,21 @@
                 },
                 "to": {
                   "model": "AuditLogs",
+                  "namespace": "public"
+                }
+              },
+              "createdTaskDependencies": {
+                "cardinality": "1:N",
+                "on": {
+                  "localFields": [
+                    "id"
+                  ],
+                  "targetFields": [
+                    "createdBy"
+                  ]
+                },
+                "to": {
+                  "model": "TaskDependencies",
                   "namespace": "public"
                 }
               },
@@ -1530,6 +1571,11 @@
                   "nativeType": "timestamp",
                   "nullable": false
                 },
+                "created_by": {
+                  "codecId": "pg/uuid@1",
+                  "nativeType": "uuid",
+                  "nullable": true
+                },
                 "dependency_task_id": {
                   "codecId": "pg/uuid@1",
                   "nativeType": "uuid",
@@ -1586,9 +1632,34 @@
                     "namespaceId": "public",
                     "tableName": "tasks"
                   }
+                },
+                {
+                  "name": "task_dependencies_created_by_fkey",
+                  "onDelete": "setNull",
+                  "source": {
+                    "columns": [
+                      "created_by"
+                    ],
+                    "namespaceId": "public",
+                    "tableName": "task_dependencies"
+                  },
+                  "target": {
+                    "columns": [
+                      "id"
+                    ],
+                    "namespaceId": "public",
+                    "tableName": "users"
+                  }
                 }
               ],
               "indexes": [
+                {
+                  "columns": [
+                    "created_by"
+                  ],
+                  "name": "task_dependencies_created_by_idx",
+                  "unique": false
+                },
                 {
                   "columns": [
                     "dependency_task_id"
@@ -2015,7 +2086,7 @@
         "kind": "postgres-schema"
       }
     },
-    "storageHash": "272396bd2b34531ae157d714f1aaace2c0d9d6a7ff4620d24bd76e9e7bbf3b07"
+    "storageHash": "75a23ec625ae12a6ed87f599bf50b51cbc59e1b6622b3ae87ffe440cef05ef48"
   },
   "capabilities": {
     "postgres": {

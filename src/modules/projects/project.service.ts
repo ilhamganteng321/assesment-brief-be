@@ -41,7 +41,11 @@ import type {
 
 type UserRow = Omit<
 	Models.public_Users,
-	"assignedTasks" | "attachments" | "auditLogs" | "projectMembers"
+	| "assignedTasks"
+	| "attachments"
+	| "auditLogs"
+	| "createdTaskDependencies"
+	| "projectMembers"
 >;
 
 function escapeLikePattern(value: string): string {

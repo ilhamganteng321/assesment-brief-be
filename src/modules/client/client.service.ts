@@ -5,6 +5,7 @@ import type {
 	TaskStatus,
 	UserContext,
 } from "../authorization/authorization.types";
+import { computeTaskBlockingStates } from "../dependencies/dependency.service";
 import { ProjectNotFoundError } from "../projects/project.errors";
 import { TaskNotFoundError } from "../tasks/task.errors";
 import type { Pagination } from "../tasks/task.types";
@@ -97,10 +98,36 @@ async function loadClientVisibleTaskMetrics(
 		countByStatus("DONE"),
 		countByStatus("IN_PROGRESS"),
 		countByStatus("TODO"),
-		countByStatus("BLOCKED"),
+		countBlockedByDependencies(),
 	]);
 
 	return { total, completed, inProgress, todo, blocked };
+
+	/**
+	 * The client sees a blocked *count*, never the prerequisites behind it, so
+	 * the number is derived from the same graph the server uses internally with
+	 * internal-only prerequisites filtered out. Counting the persisted
+	 * `BLOCKED` status instead would report zero for work that is genuinely
+	 * blocked by an internal prerequisite.
+	 */
+	async function countBlockedByDependencies(): Promise<number> {
+		const clientVisibleTasks = await db.orm.public.Tasks.where((task) =>
+			task.projectId.eq(projectId),
+		)
+			.where((task) => task.deletedAt.isNull())
+			.where((task) => task.clientVisible.eq(true))
+			.select("id")
+			.all();
+		if (clientVisibleTasks.length === 0) {
+			return 0;
+		}
+		const states = await computeTaskBlockingStates(
+			projectId,
+			clientVisibleTasks.map((task) => task.id),
+			{ visibleOnly: true },
+		);
+		return [...states.values()].filter((state) => state.blocked).length;
+	}
 }
 
 function computePercentage(completed: number, total: number): number {

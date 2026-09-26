@@ -2,6 +2,7 @@ import type { Models } from "../../prisma/contract";
 import { db } from "../../prisma/db";
 import type {
 	ProjectAuthorizationContext,
+	TaskStatus,
 	UserContext,
 } from "../authorization/authorization.types";
 import { ProjectNotFoundError } from "../projects/project.errors";
@@ -22,6 +23,7 @@ import {
 } from "./dependency.policy";
 import { createDependencySchema } from "./dependency.schema";
 import type {
+	CanStartTaskResult,
 	DependencyTaskSummary,
 	TaskBlockingState,
 	TaskDependencyRecord,
@@ -29,10 +31,20 @@ import type {
 
 type ProjectRow = Omit<Models.public_Projects, "members" | "tasks">;
 
-type TaskSummaryRow = Pick<
-	TaskRecord,
-	"id" | "title" | "status" | "clientVisible"
->;
+/**
+ * The only task fields the dependency graph needs. Narrower than `TaskRecord`
+ * on purpose: the traversal must never grow a dependency on assignee, priority,
+ * or any other column that has no business in a graph calculation.
+ */
+export type DependencyGraphTask = {
+	id: string;
+	title: string;
+	status: TaskStatus;
+	clientVisible: boolean;
+	deletedAt: TaskRecord["deletedAt"];
+};
+
+type TaskSummaryRow = DependencyGraphTask & { id: TaskRecord["id"] };
 
 export type DependencyEdge = {
 	dependentTaskId: string;
@@ -41,6 +53,11 @@ export type DependencyEdge = {
 
 export type BlockingStateOptions = {
 	visibleOnly?: boolean;
+};
+
+type DependencyGraph = {
+	tasks: TaskSummaryRow[];
+	edges: DependencyEdge[];
 };
 
 async function requireVisibleProject(projectId: string): Promise<ProjectRow> {
@@ -75,16 +92,33 @@ function toProjectContext(
 	};
 }
 
+/**
+ * Loads every task of the project, soft deleted ones included.
+ *
+ * A dependency edge outlives the task it points at because tasks are soft
+ * deleted, so the graph has to keep those rows to stay accurate. Callers decide
+ * per audience whether a deleted prerequisite may be shown.
+ */
 async function loadProjectTasks(projectId: string): Promise<TaskSummaryRow[]> {
 	return db.orm.public.Tasks.where((task) => task.projectId.eq(projectId))
-		.where((task) => task.deletedAt.isNull())
-		.select("id", "title", "status", "clientVisible")
+		.select("id", "title", "status", "clientVisible", "deletedAt")
 		.all();
 }
 
-async function loadGraph(
-	projectId: string,
-): Promise<{ tasks: TaskSummaryRow[]; edges: DependencyEdge[] }> {
+function isDeleted(task: TaskSummaryRow): boolean {
+	return task.deletedAt !== null;
+}
+
+function toSummary(task: TaskSummaryRow): DependencyTaskSummary {
+	return {
+		id: task.id,
+		title: task.title,
+		status: task.status,
+		deleted: isDeleted(task),
+	};
+}
+
+async function loadGraph(projectId: string): Promise<DependencyGraph> {
 	const tasks = await loadProjectTasks(projectId);
 	const projectTaskIds = tasks.map((task) => task.id);
 	if (projectTaskIds.length === 0) {
@@ -162,37 +196,57 @@ export async function hasCircularDependency(
 	return canReachTask(edges, dependencyTaskId, taskId);
 }
 
+/**
+ * Pure core of the blocking rule: a task is blocked while at least one
+ * prerequisite is not DONE.
+ *
+ * Kept free of I/O so the rule itself can be tested directly, and so the list,
+ * the detail view, and the transition guard cannot drift apart. A soft deleted
+ * prerequisite is not DONE either, so deleting a prerequisite never silently
+ * releases its dependents; a client guest additionally sees neither internal nor
+ * deleted prerequisites.
+ */
+export function computeBlockingState(
+	taskId: string,
+	tasks: readonly TaskSummaryRow[],
+	edges: readonly DependencyEdge[],
+	options: BlockingStateOptions = {},
+): TaskBlockingState {
+	const taskById = new Map(tasks.map((task) => [task.id, task]));
+	const blockedBy: DependencyTaskSummary[] = [];
+
+	for (const edge of edges) {
+		if (edge.dependentTaskId !== taskId) {
+			continue;
+		}
+		const prerequisite = taskById.get(edge.dependencyTaskId);
+		if (prerequisite === undefined) {
+			continue;
+		}
+		if (
+			options.visibleOnly &&
+			(!prerequisite.clientVisible || isDeleted(prerequisite))
+		) {
+			continue;
+		}
+		if (prerequisite.status !== "DONE") {
+			blockedBy.push(toSummary(prerequisite));
+		}
+	}
+
+	return { blocked: blockedBy.length > 0, blockedBy };
+}
+
 export async function computeTaskBlockingStates(
 	projectId: string,
 	taskIds: readonly string[],
 	options: BlockingStateOptions = {},
 ): Promise<Map<string, TaskBlockingState>> {
 	const { tasks, edges } = await loadGraph(projectId);
-	const taskById = new Map(tasks.map((task) => [task.id, task]));
 	const states = new Map<string, TaskBlockingState>();
 
 	for (const taskId of taskIds) {
-		const blockedBy: DependencyTaskSummary[] = [];
-		for (const edge of edges) {
-			if (edge.dependentTaskId !== taskId) {
-				continue;
-			}
-			const dependencyTask = taskById.get(edge.dependencyTaskId);
-			if (dependencyTask === undefined) {
-				continue;
-			}
-			if (options.visibleOnly && !dependencyTask.clientVisible) {
-				continue;
-			}
-			if (dependencyTask.status !== "DONE") {
-				blockedBy.push({
-					id: dependencyTask.id,
-					title: dependencyTask.title,
-					status: dependencyTask.status,
-				});
-			}
-		}
-		states.set(taskId, { blocked: blockedBy.length > 0, blockedBy });
+		states.set(taskId, computeBlockingState(taskId, tasks, edges, options));
 	}
 
 	return states;
@@ -205,6 +259,19 @@ export async function getTaskBlockingState(
 ): Promise<TaskBlockingState> {
 	const states = await computeTaskBlockingStates(projectId, [taskId], options);
 	return states.get(taskId) ?? { blocked: false, blockedBy: [] };
+}
+
+/**
+ * The single reusable dependency check. Status transitions, the board, and the
+ * detail view all ask this question so the answer can never drift.
+ */
+export async function checkCanStartTask(
+	projectId: string,
+	taskId: string,
+	options: BlockingStateOptions = {},
+): Promise<CanStartTaskResult> {
+	const blocking = await getTaskBlockingState(projectId, taskId, options);
+	return { allowed: !blocking.blocked, blockingTasks: blocking.blockedBy };
 }
 
 export async function getBlockingDependencies(
@@ -236,14 +303,10 @@ export async function getDependents(
 			continue;
 		}
 		const dependent = taskById.get(edge.dependentTaskId);
-		if (dependent === undefined) {
+		if (dependent === undefined || isDeleted(dependent)) {
 			continue;
 		}
-		dependents.push({
-			id: dependent.id,
-			title: dependent.title,
-			status: dependent.status,
-		});
+		dependents.push(toSummary(dependent));
 	}
 
 	return dependents;
@@ -298,14 +361,14 @@ export async function listDependencies(
 		if (dependencyTask === undefined) {
 			continue;
 		}
-		if (visibleOnly && !dependencyTask.clientVisible) {
+		// A client guest sees neither internal nor deleted prerequisites.
+		if (
+			visibleOnly &&
+			(!dependencyTask.clientVisible || isDeleted(dependencyTask))
+		) {
 			continue;
 		}
-		dependencies.push({
-			id: dependencyTask.id,
-			title: dependencyTask.title,
-			status: dependencyTask.status,
-		});
+		dependencies.push(toSummary(dependencyTask));
 	}
 
 	return dependencies;
@@ -351,6 +414,7 @@ export async function createDependency(
 		return tx.orm.public.TaskDependencies.create({
 			dependentTaskId: taskId,
 			dependencyTaskId,
+			createdBy: user.id,
 		});
 	});
 }
@@ -389,4 +453,48 @@ export async function removeDependency(
 	await db.orm.public.TaskDependencies.where((row) =>
 		row.id.eq(existing.id),
 	).delete();
+}
+
+/**
+ * Resolves the owning project of a task for the flat dependency surface.
+ *
+ * `GET /tasks/:taskId/dependencies` carries no project id, so the project is
+ * derived from the task itself and the task must exist. Authorization is not
+ * decided here: the nested implementations below apply the ABAC rules, which
+ * means the flat surface can never be more permissive than the nested one.
+ */
+async function requireLiveTask(taskId: string): Promise<TaskRecord> {
+	const task = await db.orm.public.Tasks.where((row) => row.id.eq(taskId))
+		.where((row) => row.deletedAt.isNull())
+		.first();
+	if (!task) {
+		throw new TaskNotFoundError();
+	}
+	return task;
+}
+
+export async function listDependenciesForTask(
+	user: UserContext,
+	taskId: string,
+): Promise<DependencyTaskSummary[]> {
+	const task = await requireLiveTask(taskId);
+	return listDependencies(user, task.projectId, task.id);
+}
+
+export async function createDependencyForTask(
+	user: UserContext,
+	taskId: string,
+	rawInput: unknown,
+): Promise<TaskDependencyRecord> {
+	const task = await requireLiveTask(taskId);
+	return createDependency(user, task.projectId, task.id, rawInput);
+}
+
+export async function removeDependencyForTask(
+	user: UserContext,
+	taskId: string,
+	dependencyTaskId: string,
+): Promise<void> {
+	const task = await requireLiveTask(taskId);
+	return removeDependency(user, task.projectId, task.id, dependencyTaskId);
 }

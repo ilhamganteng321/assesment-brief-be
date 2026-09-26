@@ -1,0 +1,125 @@
+[
+  {
+    "id": "column.public.task_dependencies.created_by",
+    "label": "Add column \"created_by\" to \"task_dependencies\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "column",
+        "name": "created_by",
+        "table": "task_dependencies"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure column \"created_by\" is missing",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "task_dependencies",
+          "created_by"
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add column \"created_by\"",
+        "sql": "ALTER TABLE \"public\".\"task_dependencies\" ADD COLUMN \"created_by\" uuid"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify column \"created_by\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"information_schema\".\"columns\" WHERE (\"table_schema\" = $1 AND \"table_name\" = $2 AND \"column_name\" = $3)) AS \"result\"",
+        "params": [
+          "public",
+          "task_dependencies",
+          "created_by"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.task_dependencies.task_dependencies_created_by_idx",
+    "label": "Create index \"task_dependencies_created_by_idx\" on \"task_dependencies\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "task_dependencies_created_by_idx",
+        "table": "task_dependencies"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"task_dependencies_created_by_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"task_dependencies_created_by_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"task_dependencies_created_by_idx\"",
+        "sql": "CREATE INDEX \"task_dependencies_created_by_idx\" ON \"public\".\"task_dependencies\" (\"created_by\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"task_dependencies_created_by_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"task_dependencies_created_by_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.task_dependencies.task_dependencies_created_by_fkey",
+    "label": "Add foreign key \"task_dependencies_created_by_fkey\" on \"task_dependencies\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "task_dependencies_created_by_fkey",
+        "table": "task_dependencies"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"task_dependencies_created_by_fkey\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "task_dependencies_created_by_fkey",
+          "public",
+          "\"public\".\"task_dependencies\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"task_dependencies_created_by_fkey\"",
+        "sql": "ALTER TABLE \"public\".\"task_dependencies\"\nADD CONSTRAINT \"task_dependencies_created_by_fkey\"\nFOREIGN KEY (\"created_by\")\nREFERENCES \"public\".\"users\" (\"id\")\nON DELETE SET NULL"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"task_dependencies_created_by_fkey\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "task_dependencies_created_by_fkey",
+          "public",
+          "\"public\".\"task_dependencies\""
+        ]
+      }
+    ]
+  }
+]

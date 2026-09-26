@@ -13,8 +13,15 @@ import {
 	createDependencySchema,
 	dependencyDeleteParamsSchema,
 	dependentTaskParamsSchema,
+	flatDependencyDeleteParamsSchema,
+	flatDependentTaskParamsSchema,
 } from "./dependency.schema";
-import { canReachTask, type DependencyEdge } from "./dependency.service";
+import {
+	canReachTask,
+	computeBlockingState,
+	type DependencyEdge,
+	type DependencyGraphTask,
+} from "./dependency.service";
 
 const pm: UserContext = { id: "pm-1", role: "PM", department: "PRODUCT" };
 const internal: UserContext = {
@@ -91,6 +98,35 @@ describe("dependency schema", () => {
 			dependencyTaskId: "5c9a1e8a-6d5b-4f21-9c3f-8f0d1a2b3c4d",
 		});
 		expect(del.dependencyTaskId).toBe("5c9a1e8a-6d5b-4f21-9c3f-8f0d1a2b3c4d");
+	});
+
+	test("flat param schemas require uuids and carry no project id", () => {
+		const parsed = flatDependentTaskParamsSchema.parse({
+			taskId: "4c9a1e8a-6d5b-4f21-9c3f-8f0d1a2b3c4d",
+		});
+		expect(parsed.taskId).toBe("4c9a1e8a-6d5b-4f21-9c3f-8f0d1a2b3c4d");
+		expect(() =>
+			flatDependentTaskParamsSchema.parse({ taskId: "a" }),
+		).toThrow();
+		// The project is resolved from the task, so it must not be accepted here.
+		expect(() =>
+			flatDependentTaskParamsSchema.parse({
+				taskId: "4c9a1e8a-6d5b-4f21-9c3f-8f0d1a2b3c4d",
+				projectId: "3c9a1e8a-6d5b-4f21-9c3f-8f0d1a2b3c4d",
+			}),
+		).toThrow();
+
+		const del = flatDependencyDeleteParamsSchema.parse({
+			taskId: "4c9a1e8a-6d5b-4f21-9c3f-8f0d1a2b3c4d",
+			dependencyId: "5c9a1e8a-6d5b-4f21-9c3f-8f0d1a2b3c4d",
+		});
+		expect(del.dependencyId).toBe("5c9a1e8a-6d5b-4f21-9c3f-8f0d1a2b3c4d");
+		expect(() =>
+			flatDependencyDeleteParamsSchema.parse({
+				taskId: "a",
+				dependencyId: "b",
+			}),
+		).toThrow();
 	});
 });
 
@@ -196,5 +232,193 @@ describe("dependency graph traversal", () => {
 		];
 		expect(canReachTask(edges, uuidD, uuidA)).toBe(true);
 		expect(canReachTask(edges, uuidA, uuidD)).toBe(false);
+	});
+});
+
+describe("blocking state derivation", () => {
+	const uuidA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+	const uuidB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+	const uuidC = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+	const uuidD = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+	// The ORM models timestamps as Temporal values, so the fixture matches that
+	// rather than a Date.
+	const DELETED_AT = Temporal.PlainDateTime.from("2026-09-26T00:00:00");
+
+	function graphTask(
+		overrides: Partial<DependencyGraphTask>,
+	): DependencyGraphTask {
+		return {
+			id: "task-1",
+			title: "Task",
+			status: "TODO",
+			clientVisible: true,
+			deletedAt: null,
+			...overrides,
+		};
+	}
+
+	function edge(
+		dependentTaskId: string,
+		dependencyTaskId: string,
+	): DependencyEdge {
+		return { dependentTaskId, dependencyTaskId };
+	}
+
+	test("a task with no prerequisites is never blocked", () => {
+		const state = computeBlockingState(uuidA, [graphTask({ id: uuidA })], []);
+		expect(state).toEqual({ blocked: false, blockedBy: [] });
+	});
+
+	test("an incomplete prerequisite blocks the dependent task", () => {
+		const tasks = [
+			graphTask({ id: uuidA, status: "IN_PROGRESS", title: "UI/UX Design" }),
+			graphTask({ id: uuidB, title: "Frontend Implementation" }),
+		];
+		const state = computeBlockingState(uuidB, tasks, [edge(uuidB, uuidA)]);
+
+		expect(state.blocked).toBe(true);
+		expect(state.blockedBy).toEqual([
+			{
+				id: uuidA,
+				title: "UI/UX Design",
+				status: "IN_PROGRESS",
+				deleted: false,
+			},
+		]);
+	});
+
+	test("completed prerequisites do not block the dependent task", () => {
+		const tasks = [
+			graphTask({ id: uuidA, status: "DONE" }),
+			graphTask({ id: uuidB, status: "DONE" }),
+			graphTask({ id: uuidC }),
+		];
+		const state = computeBlockingState(uuidC, tasks, [
+			edge(uuidC, uuidA),
+			edge(uuidC, uuidB),
+		]);
+
+		expect(state).toEqual({ blocked: false, blockedBy: [] });
+	});
+
+	test("only the unfinished prerequisites are reported as blockers", () => {
+		const tasks = [
+			graphTask({ id: uuidA, status: "DONE", title: "Backend API" }),
+			graphTask({ id: uuidB, status: "IN_PROGRESS", title: "UI/UX Design" }),
+			graphTask({ id: uuidC, status: "TODO", title: "Content" }),
+			graphTask({ id: uuidD }),
+		];
+		const state = computeBlockingState(uuidD, tasks, [
+			edge(uuidD, uuidA),
+			edge(uuidD, uuidB),
+			edge(uuidD, uuidC),
+		]);
+
+		expect(state.blocked).toBe(true);
+		expect(state.blockedBy.map((task) => task.title)).toEqual([
+			"UI/UX Design",
+			"Content",
+		]);
+	});
+
+	test("a DONE task is not reported as blocked by its own prerequisites", () => {
+		const tasks = [
+			graphTask({ id: uuidA, status: "TODO" }),
+			graphTask({ id: uuidB, status: "DONE" }),
+		];
+		const state = computeBlockingState(uuidB, tasks, [edge(uuidB, uuidA)]);
+
+		// `isBlocked` describes whether the task *could* start. A finished task
+		// keeps the fact that it had prerequisites without being held up.
+		expect(state.blocked).toBe(true);
+	});
+
+	test("a soft deleted prerequisite keeps blocking and is flagged", () => {
+		const tasks = [
+			graphTask({
+				id: uuidA,
+				status: "IN_PROGRESS",
+				title: "Removed prerequisite",
+				deletedAt: DELETED_AT,
+			}),
+			graphTask({ id: uuidB }),
+		];
+		const state = computeBlockingState(uuidB, tasks, [edge(uuidB, uuidA)]);
+
+		expect(state.blocked).toBe(true);
+		expect(state.blockedBy[0]).toEqual({
+			id: uuidA,
+			title: "Removed prerequisite",
+			status: "IN_PROGRESS",
+			deleted: true,
+		});
+	});
+
+	test("a DONE soft deleted prerequisite does not block", () => {
+		const tasks = [
+			graphTask({ id: uuidA, status: "DONE", deletedAt: DELETED_AT }),
+			graphTask({ id: uuidB }),
+		];
+		const state = computeBlockingState(uuidB, tasks, [edge(uuidB, uuidA)]);
+
+		expect(state).toEqual({ blocked: false, blockedBy: [] });
+	});
+
+	test("visibleOnly hides internal and deleted prerequisites from a client", () => {
+		const tasks = [
+			graphTask({
+				id: uuidA,
+				status: "IN_PROGRESS",
+				clientVisible: false,
+				title: "Internal work",
+			}),
+			graphTask({
+				id: uuidB,
+				status: "IN_PROGRESS",
+				deletedAt: DELETED_AT,
+				title: "Deleted work",
+			}),
+			graphTask({ id: uuidC }),
+		];
+		const edges = [edge(uuidC, uuidA), edge(uuidC, uuidB)];
+		const internal = computeBlockingState(uuidC, tasks, edges);
+		const client = computeBlockingState(uuidC, tasks, edges, {
+			visibleOnly: true,
+		});
+
+		expect(internal.blockedBy).toHaveLength(2);
+		expect(client).toEqual({ blocked: false, blockedBy: [] });
+	});
+
+	test("visibleOnly still reports a client visible prerequisite", () => {
+		const tasks = [
+			graphTask({ id: uuidA, status: "IN_PROGRESS", title: "Shared work" }),
+			graphTask({ id: uuidB }),
+		];
+		const state = computeBlockingState(uuidB, tasks, [edge(uuidB, uuidA)], {
+			visibleOnly: true,
+		});
+
+		expect(state.blocked).toBe(true);
+		expect(state.blockedBy[0]?.title).toBe("Shared work");
+	});
+
+	test("an edge pointing outside the project is ignored", () => {
+		const tasks = [graphTask({ id: uuidA })];
+		const state = computeBlockingState(uuidA, tasks, [
+			edge(uuidA, "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"),
+		]);
+
+		expect(state).toEqual({ blocked: false, blockedBy: [] });
+	});
+
+	test("a task is only judged by its own outgoing edges", () => {
+		const tasks = [
+			graphTask({ id: uuidA, status: "IN_PROGRESS" }),
+			graphTask({ id: uuidB, status: "IN_PROGRESS" }),
+		];
+		const state = computeBlockingState(uuidB, tasks, [edge(uuidA, uuidB)]);
+
+		expect(state).toEqual({ blocked: false, blockedBy: [] });
 	});
 });

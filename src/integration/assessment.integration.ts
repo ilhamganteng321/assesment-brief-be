@@ -118,6 +118,8 @@ const itEmail = (label: string): string =>
 const ownedUserIds: string[] = [];
 const ownedProjectIds: string[] = [];
 const ownedTaskIds: string[] = [];
+/** Id of the PM created by the harness, used to assert edge authorship. */
+let pmUserId = "";
 
 async function cleanup(): Promise<void> {
 	for (const taskId of ownedTaskIds) {
@@ -342,6 +344,10 @@ type Fixture = {
 	readonly tokenPm: string;
 	readonly tokenClient: string;
 	readonly projectId: string;
+	/** A second project owned by the harness, used only by the dependency checks. */
+	readonly depProjectId: string;
+	/** Id of the project client, used for the client sanitization checks. */
+	readonly clientUserId: string;
 	readonly taskAId: string;
 	readonly taskBId: string;
 	readonly taskCId: string;
@@ -350,11 +356,14 @@ type Fixture = {
 async function verifyProjectAndRoles(
 	backend: RegisteredUser,
 	frontendUserId: string,
+	backendUserId: string,
 ): Promise<Fixture> {
 	const empty: Fixture = {
 		tokenPm: "",
 		tokenClient: "",
 		projectId: "",
+		depProjectId: "",
+		clientUserId: "",
 		taskAId: "",
 		taskBId: "",
 		taskCId: "",
@@ -370,6 +379,7 @@ async function verifyProjectAndRoles(
 		department: "PRODUCT",
 	});
 	ownedUserIds.push(pmRow.id);
+	pmUserId = pmRow.id;
 	const clientRow = await db.orm.public.Users.create({
 		name: toVarchar<100>("It Client Guest"),
 		email: toVarchar<255>(clientEmail),
@@ -405,6 +415,28 @@ async function verifyProjectAndRoles(
 	}
 	ownedProjectIds.push(projectId);
 
+	// The dependency checks get their own project so their graph cannot disturb
+	// the taskA/taskB/taskC ordering fixtures below.
+	const depProject = await api("/projects", {
+		method: "POST",
+		token: tokenPm,
+		body: {
+			name: `Dependency Project ${RUN_ID}`,
+			description: "Created by the dependency integration checks.",
+		},
+	});
+	const depProjectId =
+		jsonPath<string>(depProject, ["data", "project", "id"]) ?? "";
+	record(
+		"dependencies: a dedicated project could be created",
+		depProject.status === 201 && depProjectId.length > 0,
+		`status=${depProject.status}`,
+	);
+	if (depProjectId.length === 0) {
+		return empty;
+	}
+	ownedProjectIds.push(depProjectId);
+
 	for (const member of [
 		{ label: "backend", id: backend.userId },
 		{ label: "frontend", id: frontendUserId },
@@ -421,6 +453,19 @@ async function verifyProjectAndRoles(
 			`status=${added.status}`,
 		);
 	}
+
+	// A task may only be assigned to a member of its own project, so the
+	// engineer the dependency checks assign to is added to that project.
+	const depMember = await api(`/projects/${depProjectId}/members`, {
+		method: "POST",
+		token: tokenPm,
+		body: { userId: backendUserId },
+	});
+	record(
+		"dependencies: the engineer can be added to the dependency project",
+		depMember.status === 201,
+		`status=${depMember.status}`,
+	);
 
 	// The task form needs each member's department to reject an assignee that
 	// cannot own the task before the request is sent.
@@ -518,7 +563,16 @@ async function verifyProjectAndRoles(
 		`statuses=${depResults.map((r) => r.status).join(",")}`,
 	);
 
-	return { tokenPm, tokenClient, projectId, taskAId, taskBId, taskCId };
+	return {
+		tokenPm,
+		tokenClient,
+		projectId,
+		depProjectId,
+		clientUserId: clientRow.id,
+		taskAId,
+		taskBId,
+		taskCId,
+	};
 }
 
 async function verifyProjectListContract(
@@ -1148,6 +1202,675 @@ async function verifyAttachments(
 	);
 }
 
+/** Result of a harness task creation, so a failure can be reported precisely. */
+type CreatedTask = {
+	id: string;
+	status: number;
+	code: string;
+	message: string;
+};
+
+async function createTaskFor(
+	token: string,
+	projectId: string,
+	title: string,
+	overrides: Record<string, unknown> = {},
+): Promise<CreatedTask> {
+	const created = await api("/tasks", {
+		method: "POST",
+		token,
+		body: { projectId, title, ...overrides },
+	});
+	const id = jsonPath<string>(created, ["data", "task", "id"]) ?? "";
+	if (id.length > 0) {
+		ownedTaskIds.push(id);
+	}
+	return {
+		id,
+		status: created.status,
+		code: String(jsonPath(created, ["error", "code"]) ?? ""),
+		message: String(jsonPath(created, ["error", "message"]) ?? ""),
+	};
+}
+
+/** The id of a created task, or an empty string when creation failed. */
+function idOf(created: CreatedTask): string {
+	return created.id;
+}
+
+async function verifyDependencyApi(
+	tokenPm: string,
+	/**
+	 * `tokenEngineer` is a plain INTERNAL user: it is the assignee of the
+	 * design task and doubles as the "internal may not manage dependencies"
+	 * caller.
+	 */
+	tokenEngineer: string,
+	tokenClient: string,
+	tokenOutsider: string,
+	projectId: string,
+	depProjectId: string,
+	backendUserId: string,
+	clientUserId: string,
+): Promise<void> {
+	// Spec scenario, section 35:
+	//   A = UI/UX Design  (IN_PROGRESS)
+	//   B = Backend API    (DONE)
+	//   C = Frontend Impl  (TODO)  depends on A and B
+	// The design task is assigned to a BACKEND engineer, so its department has
+	// to match; the unassigned tasks keep their own departments.
+	const designTask = await createTaskFor(
+		tokenPm,
+		depProjectId,
+		"UI/UX Design",
+		{
+			department: "BACKEND",
+			status: "IN_PROGRESS",
+			assignedToId: backendUserId,
+		},
+	);
+	const apiTask = await createTaskFor(tokenPm, depProjectId, "Backend API", {
+		department: "BACKEND",
+		status: "DONE",
+	});
+	const frontendTask = await createTaskFor(
+		tokenPm,
+		depProjectId,
+		"Frontend Implementation",
+		{ department: "FRONTEND", status: "TODO" },
+	);
+	const designId = idOf(designTask);
+	const apiId = idOf(apiTask);
+	const frontendId = idOf(frontendTask);
+	const scenarioOk =
+		designTask.status === 201 &&
+		apiTask.status === 201 &&
+		frontendTask.status === 201;
+	record(
+		"dependencies: the spec scenario tasks could be created",
+		scenarioOk,
+		`design=${designTask.status}/${designTask.code} api=${apiTask.status}/${apiTask.code} frontend=${frontendTask.status}/${frontendTask.code} ${designTask.message}${apiTask.message}${frontendTask.message}`,
+	);
+	if (!scenarioOk) {
+		return;
+	}
+
+	// --- create by PM -------------------------------------------------------
+	const wired = await api(`/tasks/${frontendId}/dependencies`, {
+		method: "POST",
+		token: tokenPm,
+		body: { dependencyTaskId: designId },
+	});
+	record(
+		"dependencies: PM can create a dependency through POST /tasks/:taskId/dependencies",
+		wired.status === 201,
+		`status=${wired.status}`,
+	);
+	record(
+		"dependencies: the created edge records its author",
+		jsonPath(wired, ["data", "dependency", "createdBy"]) === pmUserId,
+		`createdBy=${String(jsonPath(wired, ["data", "dependency", "createdBy"]))}`,
+	);
+
+	await api(`/tasks/${frontendId}/dependencies`, {
+		method: "POST",
+		token: tokenPm,
+		body: { dependencyTaskId: apiId },
+	});
+
+	const listed = await api(`/tasks/${frontendId}/dependencies`, {
+		token: tokenPm,
+	});
+	const listedIds = (
+		jsonPath<Array<{ id: string }>>(listed, ["data", "dependencies"]) ?? []
+	).map((row) => row.id);
+	record(
+		"dependencies: GET /tasks/:taskId/dependencies returns both prerequisites",
+		listed.status === 200 &&
+			listedIds.length === 2 &&
+			listedIds.includes(designId) &&
+			listedIds.includes(apiId),
+		`status=${listed.status} count=${listedIds.length}`,
+	);
+	record(
+		"dependencies: the list never exposes internal columns",
+		(
+			jsonPath<Array<Record<string, unknown>>>(listed, [
+				"data",
+				"dependencies",
+			]) ?? []
+		).every(
+			(row) => Object.keys(row).sort().join(",") === "deleted,id,status,title",
+		),
+		`keys=${Object.keys(
+			(jsonPath<Array<Record<string, unknown>>>(listed, [
+				"data",
+				"dependencies",
+			]) ?? [])[0] ?? {},
+		)
+			.sort()
+			.join(",")}`,
+	);
+
+	// --- isBlocked is calculated, never stored --------------------------------
+	const detail = await api(`/tasks/${frontendId}`, { token: tokenPm });
+	record(
+		"dependencies: a task with an unfinished prerequisite is blocked",
+		detail.status === 200 &&
+			jsonPath(detail, ["data", "task", "isBlocked"]) === true,
+		`isBlocked=${String(jsonPath(detail, ["data", "task", "isBlocked"]))}`,
+	);
+	record(
+		"dependencies: the response names the blocking tasks",
+		(
+			jsonPath<Array<{ id: string }>>(detail, ["data", "task", "blockedBy"]) ??
+			[]
+		).some((row) => row.id === designId),
+		`blockedBy=${(
+			jsonPath<Array<{ id: string }>>(detail, ["data", "task", "blockedBy"]) ??
+			[]
+		)
+			.map((row) => row.id.slice(0, 8))
+			.join(",")}`,
+	);
+
+	const doneTask = await api(`/tasks/${apiId}`, { token: tokenPm });
+	record(
+		"dependencies: a task with only completed prerequisites is not blocked",
+		jsonPath(doneTask, ["data", "task", "isBlocked"]) === false,
+		`isBlocked=${String(jsonPath(doneTask, ["data", "task", "isBlocked"]))}`,
+	);
+	const designDetail = await api(`/tasks/${designId}`, { token: tokenPm });
+	record(
+		"dependencies: a task with no prerequisites is not blocked",
+		jsonPath(designDetail, ["data", "task", "isBlocked"]) === false,
+		`isBlocked=${String(jsonPath(designDetail, ["data", "task", "isBlocked"]))}`,
+	);
+
+	// --- the start guard, reached by bypassing the UI entirely ---------------
+	const blockedStart = await api(`/tasks/${frontendId}`, {
+		method: "PATCH",
+		token: tokenPm,
+		body: { status: "IN_PROGRESS", version: 1 },
+	});
+	record(
+		"dependencies: starting a blocked task is rejected with 409 TASK_BLOCKED",
+		blockedStart.status === 409 &&
+			jsonPath(blockedStart, ["error", "code"]) === "TASK_BLOCKED",
+		`status=${blockedStart.status} code=${String(
+			jsonPath(blockedStart, ["error", "code"]),
+		)}`,
+	);
+	record(
+		"dependencies: the TASK_BLOCKED error names the blocking tasks",
+		(
+			jsonPath<Array<{ id: string }>>(blockedStart, ["error", "blockedBy"]) ??
+			[]
+		).some((row) => row.id === designId),
+		`blockedBy=${(
+			jsonPath<Array<{ id: string }>>(blockedStart, ["error", "blockedBy"]) ??
+			[]
+		)
+			.map((row) => row.id.slice(0, 8))
+			.join(",")}`,
+	);
+
+	// A client supplied isBlocked must not be able to unlock the transition.
+	const forged = await api(`/tasks/${frontendId}`, {
+		method: "PATCH",
+		token: tokenPm,
+		body: { status: "IN_PROGRESS", isBlocked: false, version: 1 },
+	});
+	record(
+		"dependencies: a client supplied isBlocked=false cannot bypass the guard",
+		forged.status === 400 || forged.status === 409,
+		`status=${forged.status}`,
+	);
+
+	const stillTodo = await api(`/tasks/${frontendId}`, { token: tokenPm });
+	record(
+		"dependencies: the blocked task never moved to IN_PROGRESS",
+		jsonPath(stillTodo, ["data", "task", "status"]) === "TODO",
+		`status=${String(jsonPath(stillTodo, ["data", "task", "status"]))}`,
+	);
+
+	// --- completing the prerequisite unblocks the task -----------------------
+	// A PM may not complete somebody else's in progress task, so the assigned
+	// engineer does it, exactly as the real workflow requires.
+	const completed = await api(`/tasks/${designId}`, {
+		method: "PATCH",
+		token: tokenEngineer,
+		body: { status: "DONE", version: 1 },
+	});
+	record(
+		"dependencies: the assignee can complete the prerequisite",
+		completed.status === 200,
+		`status=${completed.status} code=${String(
+			jsonPath(completed, ["error", "code"]),
+		)}`,
+	);
+	const unblocked = await api(`/tasks/${frontendId}`, { token: tokenPm });
+	record(
+		"dependencies: completing the prerequisite clears isBlocked",
+		jsonPath(unblocked, ["data", "task", "isBlocked"]) === false,
+		`isBlocked=${String(jsonPath(unblocked, ["data", "task", "isBlocked"]))}`,
+	);
+	const started = await api(`/tasks/${frontendId}`, {
+		method: "PATCH",
+		token: tokenPm,
+		body: { status: "IN_PROGRESS", version: 1 },
+	});
+	record(
+		"dependencies: the task can start once every prerequisite is DONE",
+		started.status === 200 &&
+			jsonPath(started, ["data", "task", "status"]) === "IN_PROGRESS",
+		`status=${started.status}`,
+	);
+
+	// --- rejections ---------------------------------------------------------
+	const selfDep = await api(`/tasks/${designId}/dependencies`, {
+		method: "POST",
+		token: tokenPm,
+		body: { dependencyTaskId: designId },
+	});
+	record(
+		"dependencies: a self dependency is rejected with 400 SELF_DEPENDENCY",
+		selfDep.status === 400 &&
+			jsonPath(selfDep, ["error", "code"]) === "SELF_DEPENDENCY",
+		`status=${selfDep.status} code=${String(
+			jsonPath(selfDep, ["error", "code"]),
+		)}`,
+	);
+
+	const duplicate = await api(`/tasks/${frontendId}/dependencies`, {
+		method: "POST",
+		token: tokenPm,
+		body: { dependencyTaskId: designId },
+	});
+	record(
+		"dependencies: a duplicate dependency is rejected with 409",
+		duplicate.status === 409 &&
+			jsonPath(duplicate, ["error", "code"]) === "DEPENDENCY_ALREADY_EXISTS",
+		`status=${duplicate.status} code=${String(
+			jsonPath(duplicate, ["error", "code"]),
+		)}`,
+	);
+
+	const missingTarget = await api(`/tasks/${frontendId}/dependencies`, {
+		method: "POST",
+		token: tokenPm,
+		body: { dependencyTaskId: "3f0a9d2c-6b1e-4a55-9f3d-2c7b5e1d9a04" },
+	});
+	record(
+		"dependencies: a prerequisite that does not exist is rejected with 404",
+		missingTarget.status === 404,
+		`status=${missingTarget.status} code=${String(
+			jsonPath(missingTarget, ["error", "code"]),
+		)}`,
+	);
+
+	const crossProjectTask = await createTaskFor(
+		tokenPm,
+		projectId,
+		"Task outside the dependency project",
+	);
+	const crossProject = await api(`/tasks/${frontendId}/dependencies`, {
+		method: "POST",
+		token: tokenPm,
+		body: { dependencyTaskId: crossProjectTask.id },
+	});
+	record(
+		"dependencies: a cross project prerequisite is rejected with 400",
+		crossProject.status === 400 &&
+			jsonPath(crossProject, ["error", "code"]) === "CROSS_PROJECT_DEPENDENCY",
+		`status=${crossProject.status} code=${String(
+			jsonPath(crossProject, ["error", "code"]),
+		)}`,
+	);
+
+	// --- cycle detection ----------------------------------------------------
+	const cycleA = idOf(await createTaskFor(tokenPm, depProjectId, "Cycle A"));
+	const cycleB = idOf(await createTaskFor(tokenPm, depProjectId, "Cycle B"));
+	const cycleC = idOf(await createTaskFor(tokenPm, depProjectId, "Cycle C"));
+	if (cycleA.length === 0 || cycleB.length === 0 || cycleC.length === 0) {
+		record("dependencies: cycle fixtures could be created", false, "");
+		return;
+	}
+	await api(`/tasks/${cycleB}/dependencies`, {
+		method: "POST",
+		token: tokenPm,
+		body: { dependencyTaskId: cycleA },
+	});
+	await api(`/tasks/${cycleC}/dependencies`, {
+		method: "POST",
+		token: tokenPm,
+		body: { dependencyTaskId: cycleB },
+	});
+	const cycle = await api(`/tasks/${cycleA}/dependencies`, {
+		method: "POST",
+		token: tokenPm,
+		body: { dependencyTaskId: cycleC },
+	});
+	record(
+		"dependencies: an indirect cycle is rejected with 409 CIRCULAR_DEPENDENCY",
+		cycle.status === 409 &&
+			jsonPath(cycle, ["error", "code"]) === "CIRCULAR_DEPENDENCY",
+		`status=${cycle.status} code=${String(jsonPath(cycle, ["error", "code"]))}`,
+	);
+
+	// --- authorization ------------------------------------------------------
+	const internalCreate = await api(`/tasks/${cycleB}/dependencies`, {
+		method: "POST",
+		token: tokenEngineer,
+		body: { dependencyTaskId: cycleC },
+	});
+	record(
+		"dependencies: an internal user cannot create a dependency",
+		internalCreate.status === 403,
+		`status=${internalCreate.status} code=${String(
+			jsonPath(internalCreate, ["error", "code"]),
+		)}`,
+	);
+
+	const clientCreate = await api(`/tasks/${cycleB}/dependencies`, {
+		method: "POST",
+		token: tokenClient,
+		body: { dependencyTaskId: cycleC },
+	});
+	record(
+		"dependencies: a client cannot create a dependency",
+		clientCreate.status === 403,
+		`status=${clientCreate.status} code=${String(
+			jsonPath(clientCreate, ["error", "code"]),
+		)}`,
+	);
+
+	const clientDelete = await api(`/tasks/${cycleB}/dependencies/${cycleA}`, {
+		method: "DELETE",
+		token: tokenClient,
+	});
+	record(
+		"dependencies: a client cannot delete a dependency",
+		clientDelete.status === 403,
+		`status=${clientDelete.status} code=${String(
+			jsonPath(clientDelete, ["error", "code"]),
+		)}`,
+	);
+
+	const internalDelete = await api(`/tasks/${cycleB}/dependencies/${cycleA}`, {
+		method: "DELETE",
+		token: tokenEngineer,
+	});
+	record(
+		"dependencies: an internal user cannot delete a dependency",
+		internalDelete.status === 403,
+		`status=${internalDelete.status}`,
+	);
+
+	const anonymous = await api(`/tasks/${cycleB}/dependencies`);
+	record(
+		"dependencies: an unauthenticated caller is rejected",
+		anonymous.status === 401,
+		`status=${anonymous.status}`,
+	);
+
+	// --- removal by an authorized user --------------------------------------
+	const removed = await api(`/tasks/${cycleB}/dependencies/${cycleA}`, {
+		method: "DELETE",
+		token: tokenPm,
+	});
+	record(
+		"dependencies: PM can remove a dependency",
+		removed.status === 204,
+		`status=${removed.status}`,
+	);
+
+	const afterRemoval = await api(`/tasks/${cycleB}/dependencies`, {
+		token: tokenPm,
+	});
+	record(
+		"dependencies: the removed prerequisite is gone from the list",
+		afterRemoval.status === 200 &&
+			(
+				jsonPath<Array<{ id: string }>>(afterRemoval, [
+					"data",
+					"dependencies",
+				]) ?? []
+			).length === 0,
+		`status=${afterRemoval.status}`,
+	);
+
+	const removeAgain = await api(`/tasks/${cycleB}/dependencies/${cycleA}`, {
+		method: "DELETE",
+		token: tokenPm,
+	});
+	record(
+		"dependencies: removing a dependency that no longer exists is a 404",
+		removeAgain.status === 404,
+		`status=${removeAgain.status} code=${String(
+			jsonPath(removeAgain, ["error", "code"]),
+		)}`,
+	);
+
+	// --- soft deleted prerequisites keep blocking ---------------------------
+	const survivor = idOf(
+		await createTaskFor(tokenPm, depProjectId, "Survivor task"),
+	);
+	const doomedId = idOf(
+		await createTaskFor(tokenPm, depProjectId, "Doomed prerequisite"),
+	);
+	await api(`/tasks/${survivor}/dependencies`, {
+		method: "POST",
+		token: tokenPm,
+		body: { dependencyTaskId: doomedId },
+	});
+	// DELETE takes the optimistic locking version as a query parameter.
+	const doomedDetail = await api(`/tasks/${doomedId}`, { token: tokenPm });
+	const doomedVersion = jsonPath<number>(doomedDetail, [
+		"data",
+		"task",
+		"version",
+	]);
+	const deleted = await api(
+		`/tasks/${doomedId}?version=${String(doomedVersion ?? 1)}`,
+		{ method: "DELETE", token: tokenPm },
+	);
+	record(
+		"dependencies: the prerequisite fixture could be soft deleted",
+		deleted.status === 204,
+		`status=${deleted.status} version=${String(doomedVersion)}`,
+	);
+	if (deleted.status !== 204) {
+		return;
+	}
+
+	const survivorDetail = await api(`/tasks/${survivor}`, { token: tokenPm });
+	record(
+		"dependencies: a soft deleted prerequisite keeps the task blocked",
+		jsonPath(survivorDetail, ["data", "task", "isBlocked"]) === true,
+		`isBlocked=${String(
+			jsonPath(survivorDetail, ["data", "task", "isBlocked"]),
+		)}`,
+	);
+	record(
+		"dependencies: the blocking summary flags the deleted prerequisite",
+		(
+			jsonPath<Array<{ id: string; deleted: boolean }>>(survivorDetail, [
+				"data",
+				"task",
+				"blockedBy",
+			]) ?? []
+		).some((row) => row.id === doomedId && row.deleted === true),
+		`blockedBy=${(
+			jsonPath<Array<{ id: string; deleted: boolean }>>(survivorDetail, [
+				"data",
+				"task",
+				"blockedBy",
+			]) ?? []
+		)
+			.map((row) => `${row.id.slice(0, 8)}:${row.deleted}`)
+			.join(",")}`,
+	);
+
+	// --- the flat and nested surfaces agree ----------------------------------
+	const nestedList = await api(
+		`/projects/${depProjectId}/tasks/${survivor}/dependencies`,
+		{ token: tokenPm },
+	);
+	const nestedIds = (
+		jsonPath<Array<{ id: string }>>(nestedList, ["data", "dependencies"]) ?? []
+	).map((row) => row.id);
+	const flatIds = (
+		jsonPath<Array<{ id: string }>>(
+			await api(`/tasks/${survivor}/dependencies`, { token: tokenPm }),
+			["data", "dependencies"],
+		) ?? []
+	).map((row) => row.id);
+	record(
+		"dependencies: the flat and nested surfaces return the same prerequisites",
+		nestedList.status === 200 &&
+			nestedIds.length > 0 &&
+			JSON.stringify(nestedIds) === JSON.stringify(flatIds),
+		`status=${nestedList.status} nested=${nestedIds.length} flat=${flatIds.length}`,
+	);
+
+	const unknownTask = await api(
+		"/tasks/3f0a9d2c-6b1e-4a55-9f3d-2c7b5e1d9a04/dependencies",
+		{ token: tokenPm },
+	);
+	record(
+		"dependencies: listing dependencies of an unknown task is a 404",
+		unknownTask.status === 404,
+		`status=${unknownTask.status}`,
+	);
+
+	const unknownTarget = await api(
+		"/tasks/3f0a9d2c-6b1e-4a55-9f3d-2c7b5e1d9a04/dependencies",
+		{ method: "POST", token: tokenPm, body: { dependencyTaskId: survivor } },
+	);
+	record(
+		"dependencies: a dependency on an unknown task is a 404",
+		unknownTarget.status === 404,
+		`status=${unknownTarget.status} code=${String(
+			jsonPath(unknownTarget, ["error", "code"]),
+		)}`,
+	);
+
+	// --- a non member cannot read the graph ---------------------------------
+	const outsiderRead = await api(`/tasks/${survivor}/dependencies`, {
+		token: tokenOutsider,
+	});
+	record(
+		"dependencies: a non member cannot read a task's prerequisites",
+		outsiderRead.status === 403,
+		`status=${outsiderRead.status} code=${String(
+			jsonPath(outsiderRead, ["error", "code"]),
+		)}`,
+	);
+
+	// --- the client view is sanitized, not merely filtered -------------------
+	// A client only ever sees `clientVisible` tasks, so the dependent task is
+	// client visible while its prerequisite deliberately is not.
+	const clientVisibleTask = await createTaskFor(
+		tokenPm,
+		depProjectId,
+		"Client visible deliverable",
+		{ clientVisible: true, status: "TODO" },
+	);
+	const internalPrereq = await createTaskFor(
+		tokenPm,
+		depProjectId,
+		"Internal prerequisite",
+		{ status: "TODO" },
+	);
+	if (
+		clientVisibleTask.status !== 201 ||
+		internalPrereq.status !== 201 ||
+		(
+			await api(`/tasks/${clientVisibleTask.id}/dependencies`, {
+				method: "POST",
+				token: tokenPm,
+				body: { dependencyTaskId: internalPrereq.id },
+			})
+		).status !== 201
+	) {
+		record(
+			"dependencies: the client sanitization fixtures could be created",
+			false,
+			"",
+		);
+		return;
+	}
+	record(
+		"dependencies: an internal prerequisite blocks the internal view",
+		jsonPath(await api(`/tasks/${clientVisibleTask.id}`, { token: tokenPm }), [
+			"data",
+			"task",
+			"isBlocked",
+		]) === true,
+		"",
+	);
+
+	const clientMember = await api(`/projects/${depProjectId}/members`, {
+		method: "POST",
+		token: tokenPm,
+		body: { userId: clientUserId },
+	});
+	record(
+		"dependencies: the client can be added to the dependency project",
+		clientMember.status === 201,
+		`status=${clientMember.status}`,
+	);
+	if (clientMember.status !== 201) {
+		return;
+	}
+
+	const clientList = await api(`/tasks/${clientVisibleTask.id}/dependencies`, {
+		token: tokenClient,
+	});
+	const clientIds = (
+		jsonPath<Array<{ id: string }>>(clientList, ["data", "dependencies"]) ?? []
+	).map((row) => row.id);
+	record(
+		"dependencies: the client never sees an internal prerequisite",
+		clientList.status === 200 &&
+			!clientIds.includes(internalPrereq.id) &&
+			clientIds.length === 0,
+		`status=${clientList.status} count=${clientIds.length}`,
+	);
+	const clientDetail = await api(
+		`/client/projects/${depProjectId}/tasks/${clientVisibleTask.id}`,
+		{ token: tokenClient },
+	);
+	const clientTaskPayload =
+		jsonPath<Record<string, unknown>>(clientDetail, ["data", "task"]) ?? {};
+	record(
+		"dependencies: the client portal payload carries no internal blocking data",
+		clientDetail.status === 200 &&
+			!("isBlocked" in clientTaskPayload) &&
+			!("blockedBy" in clientTaskPayload),
+		`status=${clientDetail.status} keys=${Object.keys(clientTaskPayload).sort().join(",")}`,
+	);
+
+	// The dashboard reports how much client visible work is blocked, without
+	// ever naming the internal prerequisites that block it.
+	const clientDashboard = await api("/client/dashboard", {
+		token: tokenClient,
+	});
+	const dashboardProjects = jsonPath<Array<{ id: string; metrics?: unknown }>>(
+		clientDashboard,
+		["data", "projects"],
+	);
+	const depProjectMetrics = (dashboardProjects ?? []).find(
+		(project) => project.id === depProjectId,
+	);
+	record(
+		"dependencies: the client dashboard reports the dependency project",
+		clientDashboard.status === 200 && depProjectMetrics !== undefined,
+		`status=${clientDashboard.status}`,
+	);
+}
+
 async function verifyFlatTaskApi(
 	tokenPm: string,
 	tokenInternal: string,
@@ -1460,7 +2183,11 @@ async function main(): Promise<void> {
 			department: "FRONTEND",
 		});
 
-		const fixture = await verifyProjectAndRoles(backend, frontend.userId);
+		const fixture = await verifyProjectAndRoles(
+			backend,
+			frontend.userId,
+			backend.userId,
+		);
 		if (fixture.projectId.length === 0) {
 			fail("fixture: project could not be created", "");
 			return;
@@ -1506,6 +2233,16 @@ async function main(): Promise<void> {
 			backend.userId,
 			frontend.userId,
 			fixture.projectId,
+		);
+		await verifyDependencyApi(
+			fixture.tokenPm,
+			backend.token,
+			fixture.tokenClient,
+			frontend.token,
+			fixture.projectId,
+			fixture.depProjectId,
+			backend.userId,
+			fixture.clientUserId,
 		);
 	} catch (error) {
 		fail(

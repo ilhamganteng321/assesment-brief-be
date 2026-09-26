@@ -822,6 +822,100 @@ export const openApiDocument = {
 				},
 			},
 		},
+		"/tasks/{taskId}/dependencies": {
+			get: {
+				tags: ["Dependencies"],
+				summary: "List dependencies of a task",
+				description:
+					"Flat equivalent of the project scoped route. The owning project is resolved from the task, and the same visibility rules apply: an internal caller sees the prerequisites of a task it can access, a client guest sees only client visible, non deleted prerequisites. `deleted` marks a prerequisite whose task was soft deleted, so a dependent task never silently loses a block.",
+				operationId: "listTaskDependencies",
+				security: bearerSecurity,
+				parameters: [taskIdParam("Task id")],
+				responses: {
+					"200": success({
+						type: "object",
+						properties: {
+							dependencies: {
+								type: "array",
+								items: ref("DependencyTaskSummary"),
+							},
+						},
+						required: ["dependencies"],
+					}),
+					...COMMON_ERRORS,
+				},
+			},
+			post: {
+				tags: ["Dependencies"],
+				summary: "Add a prerequisite to a task",
+				description:
+					"Requires a Bearer JWT with the TASK_DEPENDENCY_CREATE permission (PM). The prerequisite must live in the same project as the dependent task, must not be the task itself, must not already be a prerequisite, and must not create a cycle.",
+				operationId: "createTaskDependency",
+				security: bearerSecurity,
+				parameters: [taskIdParam("Dependent task id")],
+				requestBody: {
+					required: true,
+					content: {
+						"application/json": {
+							schema: ref("CreateDependencyRequest"),
+						},
+					},
+				},
+				responses: {
+					"201": success({
+						type: "object",
+						properties: { dependency: ref("TaskDependency") },
+						required: ["dependency"],
+					}),
+					...shareableErrorResponses([
+						{
+							status: 400,
+							code: "SELF_DEPENDENCY",
+							message: "Task cannot depend on itself",
+						},
+						{
+							status: 400,
+							code: "CROSS_PROJECT_DEPENDENCY",
+							message: "Dependencies must be within the same project",
+						},
+						{
+							status: 409,
+							code: "DEPENDENCY_ALREADY_EXISTS",
+							message: "This dependency already exists",
+						},
+						{
+							status: 409,
+							code: "CIRCULAR_DEPENDENCY",
+							message: "Creating this dependency would create a cycle",
+						},
+					]),
+				},
+			},
+		},
+		"/tasks/{taskId}/dependencies/{dependencyId}": {
+			delete: {
+				tags: ["Dependencies"],
+				summary: "Remove a prerequisite from a task",
+				description:
+					"Requires a Bearer JWT with the TASK_DEPENDENCY_DELETE permission (PM). `dependencyId` is the prerequisite task id, the same value returned by the list endpoint.",
+				operationId: "deleteTaskDependency",
+				security: bearerSecurity,
+				parameters: [
+					taskIdParam("Dependent task id"),
+					{
+						name: "dependencyId",
+						in: "path",
+						required: true,
+						schema: uuidSchema("Task id"),
+						description: "Id of the prerequisite task to detach",
+					},
+				],
+				responses: {
+					"204": { description: "Dependency removed, no content" },
+					...shareableErrorResponses(),
+				},
+			},
+		},
 		"/projects/{projectId}/tasks/{taskId}/attachments": {
 			get: {
 				tags: ["Attachments"],
@@ -1201,8 +1295,9 @@ export const openApiDocument = {
 							id: uuidSchema("User id"),
 							name: { type: "string" },
 							email: { type: "string", format: "email" },
+							department: ref("Department"),
 						},
-						required: ["id", "name", "email"],
+						required: ["id", "name", "email", "department"],
 					},
 				},
 				required: ["id", "projectId", "userId", "createdAt", "user"],
@@ -1220,8 +1315,13 @@ export const openApiDocument = {
 					id: uuidSchema("Task id"),
 					title: { type: "string" },
 					status: ref("TaskStatus"),
+					deleted: {
+						type: "boolean",
+						description:
+							"True when the prerequisite task has been soft deleted. The dependency row survives, so the dependent task stays blocked instead of silently becoming startable.",
+					},
 				},
-				required: ["id", "title", "status"],
+				required: ["id", "title", "status", "deleted"],
 			},
 			Task: {
 				type: "object",
@@ -1313,9 +1413,21 @@ export const openApiDocument = {
 					id: uuidSchema("Dependency id"),
 					dependentTaskId: uuidSchema("Task id"),
 					dependencyTaskId: uuidSchema("Task id"),
+					createdBy: {
+						...uuidSchema("User id"),
+						nullable: true,
+						description:
+							"User that wired the edge. Null once that user has been removed.",
+					},
 					createdAt: { type: "string", format: "date-time" },
 				},
-				required: ["id", "dependentTaskId", "dependencyTaskId", "createdAt"],
+				required: [
+					"id",
+					"dependentTaskId",
+					"dependencyTaskId",
+					"createdBy",
+					"createdAt",
+				],
 			},
 			CreateDependencyRequest: {
 				type: "object",
@@ -1402,6 +1514,8 @@ export const openApiDocument = {
 			},
 			ClientMetrics: {
 				type: "object",
+				description:
+					"Counts over the client visible tasks of one project. `blocked` is derived from the dependency graph with internal-only prerequisites filtered out, so it reports how much client visible work is waiting without ever revealing what it is waiting on.",
 				properties: {
 					total: { type: "integer" },
 					completed: { type: "integer" },

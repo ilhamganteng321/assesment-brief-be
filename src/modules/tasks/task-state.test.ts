@@ -31,7 +31,30 @@ describe("task state transition", () => {
 				blocking({
 					blocked: true,
 					blockedBy: [
-						{ id: "task-b", title: "Backend API", status: "IN_PROGRESS" },
+						{
+							id: "task-b",
+							title: "Backend API",
+							status: "IN_PROGRESS",
+							deleted: false,
+						},
+					],
+				}),
+			),
+		).toBe(false);
+	});
+
+	test("canStartTask treats a deleted prerequisite as a block", () => {
+		expect(
+			canStartTask(
+				blocking({
+					blocked: true,
+					blockedBy: [
+						{
+							id: "task-a",
+							title: "Removed prerequisite",
+							status: "TODO",
+							deleted: true,
+						},
 					],
 				}),
 			),

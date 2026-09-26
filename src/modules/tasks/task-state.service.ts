@@ -3,8 +3,14 @@ import type {
 	TaskStatus,
 } from "../authorization/authorization.types";
 import { TaskBlockedError } from "../dependencies/dependency.errors";
-import { computeTaskBlockingStates } from "../dependencies/dependency.service";
-import type { TaskBlockingState } from "../dependencies/dependency.types";
+import {
+	checkCanStartTask,
+	computeTaskBlockingStates,
+} from "../dependencies/dependency.service";
+import type {
+	CanStartTaskResult,
+	TaskBlockingState,
+} from "../dependencies/dependency.types";
 
 const EMPTY_BLOCKING_STATE: TaskBlockingState = {
 	blocked: false,
@@ -23,6 +29,11 @@ export function canStartTask(blocking: TaskBlockingState): boolean {
 	return !blocking.blocked;
 }
 
+/**
+ * The guard every status transition goes through. Only a move into IN_PROGRESS
+ * is a "start", and the decision is always made from the dependency graph that
+ * the server calculated, never from anything the client claimed.
+ */
 export async function validateStatusTransition(
 	projectId: string,
 	task: Pick<TaskAuthorizationContext, "id" | "status">,
@@ -32,8 +43,10 @@ export async function validateStatusTransition(
 		return;
 	}
 
-	const blocking = await getTaskBlockingState(projectId, task.id);
-	if (blocking.blocked) {
-		throw new TaskBlockedError(blocking.blockedBy);
+	const result = await checkCanStartTask(projectId, task.id);
+	if (!result.allowed) {
+		throw new TaskBlockedError(result.blockingTasks);
 	}
 }
+
+export type { CanStartTaskResult };

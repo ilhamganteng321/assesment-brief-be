@@ -39,7 +39,6 @@ import {
 	createTaskSchema,
 	DEFAULT_TASK_LIST_QUERY,
 	TASK_DEPARTMENTS,
-	TASK_PRIORITIES,
 	updateTaskSchema,
 } from "./task.schema";
 import type {
@@ -51,8 +50,6 @@ import type {
 	TaskListResponse,
 	TaskOfficialListQueryInput,
 	TaskPriority,
-	TaskProjectRow,
-	TaskRecord,
 	TaskResponse,
 } from "./task.types";
 import { validateStatusTransition } from "./task-state.service";

@@ -22,6 +22,7 @@ namespace public {
     assignedTasks  Tasks[]
     auditLogs      AuditLogs[]
     attachments    Attachments[]
+    createdTaskDependencies TaskDependencies[]
 
     @@index([role], map: "users_role_idx")
     @@index([department], map: "users_department_idx")
@@ -169,12 +170,16 @@ namespace public {
 
   model TaskDependencies {
     id               Uuid      @id(map: "task_dependencies_pkey") @default(dbgenerated("gen_random_uuid()"))
-
+  
     dependentTaskId  Uuid      @map("dependent_task_id")
     dependencyTaskId Uuid      @map("dependency_task_id")
-
+  
+    // Who wired the edge. Nullable with SetNull because users are hard
+    // deleted; the dependency itself must survive the removal of its author.
+    createdBy        Uuid?     @map("created_by")
+  
     createdAt        Timestamp @default(now()) @map("created_at")
-
+  
     dependentTask Tasks @relation(
       "TaskDependencies",
       fields: [dependentTaskId],
@@ -183,7 +188,7 @@ namespace public {
       map: "task_dependencies_dependent_task_id_fkey",
       index: false
     )
-
+  
     dependencyTask Tasks @relation(
       "TaskDependents",
       fields: [dependencyTaskId],
@@ -192,22 +197,35 @@ namespace public {
       map: "task_dependencies_dependency_task_id_fkey",
       index: false
     )
-
+  
+    createdByUser Users? @relation(
+      fields: [createdBy],
+      references: [id],
+      onDelete: SetNull,
+      map: "task_dependencies_created_by_fkey",
+      index: false
+    )
+  
     @@unique(
       [dependentTaskId, dependencyTaskId],
       map: "task_dependencies_unique"
     )
-
+  
     @@index(
       [dependentTaskId],
       map: "task_dependencies_dependent_task_id_idx"
     )
-
+  
     @@index(
       [dependencyTaskId],
       map: "task_dependencies_dependency_task_id_idx"
     )
-
+  
+    @@index(
+      [createdBy],
+      map: "task_dependencies_created_by_idx"
+    )
+  
     @@map("task_dependencies")
   }
 

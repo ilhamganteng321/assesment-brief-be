@@ -5,7 +5,10 @@ import { attachmentRoutes } from "../modules/attachments/attachment.routes";
 import { auditRoutes } from "../modules/audit/audit.routes";
 import { authRoutes } from "../modules/auth/auth.routes";
 import { clientRoutes } from "../modules/client/client.routes";
-import { dependencyRoutes } from "../modules/dependencies/dependency.routes";
+import {
+	dependencyRoutes,
+	flatDependencyRoutes,
+} from "../modules/dependencies/dependency.routes";
 import { projectRoutes } from "../modules/projects/project.routes";
 import { flatTaskRoutes, taskRoutes } from "../modules/tasks/task.routes";
 import { devRoutes } from "./dev";
@@ -23,6 +26,8 @@ routes.route("/projects", projectRoutes);
 routes.route("/projects", taskRoutes);
 
 routes.route("/tasks", flatTaskRoutes);
+
+routes.route("/tasks", flatDependencyRoutes);
 
 routes.route("/projects", dependencyRoutes);
 
