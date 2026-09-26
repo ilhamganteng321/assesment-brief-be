@@ -7,6 +7,15 @@ export class TaskNotFoundError extends HttpError {
 	}
 }
 
+/**
+ * Optimistic-locking rejection.
+ *
+ * Raised only after the atomic compare-and-swap matched zero rows, which means
+ * the caller's version was stale (or the task was soft-deleted underneath the
+ * request). The message is user-facing: it never leaks a database detail, and
+ * the metadata carries exactly what the client needs to recover, so the caller
+ * can refetch and replay against the current version.
+ */
 export class TaskVersionConflictError extends HttpError {
 	constructor(
 		taskId: string,
@@ -16,9 +25,10 @@ export class TaskVersionConflictError extends HttpError {
 	) {
 		super(
 			409,
-			"TASK_VERSION_CONFLICT",
-			"Task has been modified by another user.",
+			"CONCURRENT_MODIFICATION",
+			"This task has been modified by another user. Please refresh and try again.",
 			{
+				resourceId: taskId,
 				taskId,
 				expectedVersion,
 				currentVersion,

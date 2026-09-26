@@ -1,6 +1,12 @@
+import { param } from "@prisma/orm-family-sql/relational-core/expression";
 import type { Models } from "../../prisma/contract";
 import { db } from "../../prisma/db";
-import { nowTimestamp, toTimestamp, toVarchar } from "../../prisma/scalars";
+import {
+	nowTimestamp,
+	type TimestampValue,
+	toTimestamp,
+	toVarchar,
+} from "../../prisma/scalars";
 import { buildAuditEntries, createAuditLogs } from "../audit/audit.service";
 import type {
 	ProjectAuthorizationContext,
@@ -368,6 +374,149 @@ export async function createTask(
 	return toTaskResponse(task, EMPTY_BLOCKING_STATE);
 }
 
+/**
+ * A stored task row. `Models.public_Tasks` carries the relation fields too, so
+ * the scalar shape is derived from it rather than restated.
+ */
+type TaskRecord = Pick<
+	Models.public_Tasks,
+	| "id"
+	| "projectId"
+	| "assignedToId"
+	| "title"
+	| "description"
+	| "status"
+	| "priority"
+	| "department"
+	| "clientVisible"
+	| "version"
+	| "createdAt"
+	| "updatedAt"
+	| "deletedAt"
+>;
+
+/** Transaction handle passed to `db.transaction`, reused by the helpers below. */
+type TaskTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Atomic compare-and-swap for a task row.
+ *
+ * The expected version travels in the WHERE clause and the increment happens
+ * inside the same statement, so PostgreSQL -- not this process -- decides the
+ * winner. Two requests that both read version N cannot both match: the loser
+ * re-evaluates the predicate against the row it was waiting to lock, updates
+ * zero rows, and is rejected on the `affectedCount() === 0` branch. A
+ * read-then-write check inside the service would let both through, which is why
+ * no application-level lock is used anywhere in this path.
+ *
+ * The whole row is written rather than a dynamically assembled SET list, so
+ * the statement has one fixed shape: fields the caller did not change keep the
+ * value from `current`, which was read inside this same transaction. The
+ * version guard is what proves `current` is still the row being written.
+ *
+ * Column names are the physical snake_case ones because this statement is
+ * hand-written on purpose: it is the one place in the task module that must
+ * bypass the query builder to make the guard part of the SQL.
+ */
+async function compareAndSwapTask(
+	tx: TaskTransaction,
+	current: TaskRecord,
+	expectedVersion: number,
+	changes: {
+		readonly title: string;
+		readonly description: string | null;
+		readonly status: string;
+		readonly priority: string;
+		readonly department: string;
+		readonly assignedToId: string | null;
+		readonly clientVisible: boolean;
+	},
+): Promise<number> {
+	const updated = await tx.execute(
+		db.raw.sql`UPDATE "public"."tasks"
+			SET "title" = ${param(changes.title, { codecId: "pg/text@1" })}::varchar(200),
+				"description" = ${param(changes.description, { codecId: "pg/text@1" })}::text,
+				"status" = ${changes.status}::"task_status",
+				"priority" = ${changes.priority}::"task_priority",
+				"department" = ${changes.department}::"department",
+				"assigned_to_id" = ${param(changes.assignedToId, { codecId: "pg/uuid@1" })}::uuid,
+				"client_visible" = ${changes.clientVisible}::boolean,
+				"version" = "tasks"."version" + 1,
+				"updated_at" = now()
+			WHERE "id" = ${current.id}::uuid
+				AND "project_id" = ${current.projectId}::uuid
+				AND "version" = ${expectedVersion}::int4
+				AND "deleted_at" IS NULL`
+			.affectedCount()
+			.build(),
+	);
+	return updated.affectedRows;
+}
+
+/**
+ * Soft delete guarded by the same compare-and-swap, so a delete and a patch
+ * that both start from the same version cannot both win. A stale patch can
+ * therefore never resurrect or modify a task that was just deleted.
+ */
+async function compareAndSwapSoftDelete(
+	tx: TaskTransaction,
+	current: TaskRecord,
+	expectedVersion: number,
+	deletedAt: TimestampValue,
+): Promise<number> {
+	const updated = await tx.execute(
+		db.raw.sql`UPDATE "public"."tasks"
+			SET "deleted_at" = ${param(deletedAt, { codecId: "pg/timestamp-temporal@1" })}::timestamp,
+				"version" = "tasks"."version" + 1,
+				"updated_at" = now()
+			WHERE "id" = ${current.id}::uuid
+				AND "project_id" = ${current.projectId}::uuid
+				AND "version" = ${expectedVersion}::int4
+				AND "deleted_at" IS NULL`
+			.affectedCount()
+			.build(),
+	);
+	return updated.affectedRows;
+}
+
+/**
+ * Build the 409 for a lost optimistic-lock race.
+ *
+ * Called only once the compare-and-swap has already matched zero rows, so the
+ * row is re-read here to report the version the caller actually collided with
+ * plus a ready-to-render snapshot. The snapshot goes through the same
+ * client-visibility projection as a normal read, so a conflict can never leak an
+ * internal prerequisite to a client.
+ */
+async function buildVersionConflictError(
+	tx: TaskTransaction,
+	user: UserContext,
+	taskId: string,
+	expectedVersion: number,
+): Promise<TaskVersionConflictError> {
+	const latest = await tx.orm.public.Tasks.where((row) =>
+		row.id.eq(taskId),
+	).first();
+	if (!latest) {
+		return new TaskVersionConflictError(
+			taskId,
+			expectedVersion,
+			expectedVersion,
+		);
+	}
+	const latestBlocking = await getBlockingState(
+		latest.projectId,
+		latest.id,
+		user.role === "CLIENT",
+	);
+	return new TaskVersionConflictError(
+		taskId,
+		expectedVersion,
+		latest.version,
+		toTaskResponse(latest, latestBlocking),
+	);
+}
+
 export async function updateTask(
 	user: UserContext,
 	projectId: string,
@@ -477,11 +626,6 @@ export async function updateTask(
 	};
 
 	const updated = await db.transaction(async (tx) => {
-		await tx.execute(
-			db.raw.sql`SELECT pg_advisory_xact_lock(hashtext('task:' || ${task.id}))`
-				.affectedCount()
-				.build(),
-		);
 		const current = await tx.orm.public.Tasks.where((row) => row.id.eq(task.id))
 			.where((row) => row.projectId.eq(project.id))
 			.first();
@@ -492,28 +636,33 @@ export async function updateTask(
 			throw new TaskAlreadyDeletedError();
 		}
 		if (current.version !== input.version) {
-			const latestBlocking = await getBlockingState(
-				project.id,
-				current.id,
-				user.role === "CLIENT",
-			);
-			throw new TaskVersionConflictError(
-				task.id,
-				input.version,
-				current.version,
-				toTaskResponse(current, latestBlocking),
-			);
+			throw await buildVersionConflictError(tx, user, task.id, input.version);
 		}
-		const result = await tx.orm.public.Tasks.where((row) => row.id.eq(task.id))
-			.where((row) => row.projectId.eq(project.id))
-			.where((row) => row.deletedAt.isNull())
-			.update({ ...data, version: input.version + 1 });
+		const affectedRows = await compareAndSwapTask(tx, current, input.version, {
+			title: data.title ?? current.title,
+			description:
+				data.description === undefined ? current.description : data.description,
+			status: data.status ?? current.status,
+			priority: data.priority ?? current.priority,
+			department: data.department ?? current.department,
+			assignedToId:
+				data.assignedToId === undefined
+					? current.assignedToId
+					: data.assignedToId,
+			clientVisible: data.clientVisible ?? current.clientVisible,
+		});
+		if (affectedRows !== 1) {
+			// The row no longer matches the version this request was built on.
+			// Re-read to report the real current state to the caller.
+			throw await buildVersionConflictError(tx, user, task.id, input.version);
+		}
+		// Re-read inside the same transaction: the row just written is this
+		// transaction's own write, so the read cannot observe anyone else's.
+		const result = await tx.orm.public.Tasks.where((row) =>
+			row.id.eq(task.id),
+		).first();
 		if (!result) {
-			throw new TaskVersionConflictError(
-				task.id,
-				input.version,
-				input.version + 1,
-			);
+			throw new TaskNotFoundError();
 		}
 		const auditEntries = buildAuditEntries({
 			taskId: task.id,
@@ -561,11 +710,6 @@ export async function softDeleteTask(
 	}
 
 	await db.transaction(async (tx) => {
-		await tx.execute(
-			db.raw.sql`SELECT pg_advisory_xact_lock(hashtext('task:' || ${task.id}))`
-				.affectedCount()
-				.build(),
-		);
 		const current = await tx.orm.public.Tasks.where((row) => row.id.eq(task.id))
 			.where((row) => row.projectId.eq(project.id))
 			.first();
@@ -576,26 +720,22 @@ export async function softDeleteTask(
 			throw new TaskAlreadyDeletedError();
 		}
 		if (current.version !== expectedVersion) {
-			throw new TaskVersionConflictError(
-				task.id,
-				expectedVersion,
-				current.version,
-			);
+			throw await buildVersionConflictError(tx, user, task.id, expectedVersion);
 		}
 		const deletedAt = nowTimestamp();
-		const result = await tx.orm.public.Tasks.where((row) => row.id.eq(task.id))
-			.where((row) => row.projectId.eq(project.id))
-			.where((row) => row.deletedAt.isNull())
-			.update({
-				deletedAt,
-				version: expectedVersion + 1,
-			});
-		if (!result) {
-			throw new TaskVersionConflictError(
-				task.id,
-				expectedVersion,
-				expectedVersion + 1,
-			);
+		// The delete carries the same compare-and-swap guard as an update, so a
+		// delete and a patch that both start from the same version cannot both
+		// win: whichever statement lands first bumps the version and the other
+		// matches zero rows. A stale patch therefore can never resurrect or
+		// modify a task that was just deleted.
+		const affectedRows = await compareAndSwapSoftDelete(
+			tx,
+			current,
+			expectedVersion,
+			deletedAt,
+		);
+		if (affectedRows !== 1) {
+			throw await buildVersionConflictError(tx, user, task.id, expectedVersion);
 		}
 		const auditEntries = buildAuditEntries({
 			taskId: task.id,

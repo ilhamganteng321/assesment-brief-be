@@ -39,7 +39,16 @@ function success(dataSchema: Schema): Record<string, unknown> {
 	};
 }
 
-type ErrorEntry = { status: number; code: string; message: string };
+type ErrorEntry = {
+	status: number;
+	code: string;
+	message: string;
+	/**
+	 * Extra error fields merged into the example body. Used where the client
+	 * needs more than the code and message to recover.
+	 */
+	extraExample?: Record<string, unknown>;
+};
 
 function errors(entries: readonly ErrorEntry[]): Record<string, unknown> {
 	const responses: Record<string, unknown> = {};
@@ -55,6 +64,7 @@ function errors(entries: readonly ErrorEntry[]): Record<string, unknown> {
 							code: entry.code,
 							message: entry.message,
 							requestId: "3c9a1e8a-6d5b-4f21-9c3f-8f0d1a2b3c4d",
+							...(entry.extraExample ?? {}),
 						},
 					},
 				},
@@ -98,6 +108,31 @@ const INTERNAL_ERROR: ErrorEntry = {
 	status: 500,
 	code: "INTERNAL_SERVER_ERROR",
 	message: "Internal server error",
+};
+
+/**
+ * Lost optimistic-lock race. The caller submitted a `version` that no longer
+ * matched the stored row, so nothing was written. The example shows the
+ * recovery fields the server adds on top of the standard error body: the
+ * resource that moved on, the version that was expected, the version now
+ * stored, and the current row so a client can refetch and replay.
+ */
+const CONCURRENT_MODIFICATION: ErrorEntry = {
+	status: 409,
+	code: "CONCURRENT_MODIFICATION",
+	message:
+		"This task has been modified by another user. Please refresh and try again.",
+	extraExample: {
+		resourceId: "7f1c1f5e-0f5a-4b0a-9f9b-3a4b5c6d7e8f",
+		expectedVersion: 7,
+		currentVersion: 8,
+		latestTask: {
+			id: "7f1c1f5e-0f5a-4b0a-9f9b-3a4b5c6d7e8f",
+			title: "Frontend Implementation",
+			status: "IN_PROGRESS",
+			version: 8,
+		},
+	},
 };
 
 const COMMON_ERRORS = errors([
@@ -659,7 +694,7 @@ export const openApiDocument = {
 				tags: ["Tasks"],
 				summary: "Update a task",
 				description:
-					"Requires a Bearer JWT. Optimistic locking is enforced via the version field. Status changes are subject to role, membership, assignment, task state, and dependency rules: internal users may only change status on tasks assigned to them, and a task cannot move to IN_PROGRESS while required dependencies are incomplete. Only PMs may edit descriptions or change client visibility.",
+					"Requires a Bearer JWT. Optimistic locking: send the `version` returned by the last read. The check and the write are a single atomic statement, so when the stored version has moved on nothing is written and the request is rejected with 409 CONCURRENT_MODIFICATION — a stale client can never overwrite a newer row. The version is a concurrency token only and is never settable by the client. A matching version does not bypass authorization, the task state machine, or the dependency rules. Status changes are subject to role, membership, assignment, task state, and dependency rules: internal users may only change status on tasks assigned to them, and a task cannot move to IN_PROGRESS while required dependencies are incomplete. Only PMs may edit descriptions or change client visibility.",
 				operationId: "updateTask",
 				security: bearerSecurity,
 				parameters: [projectIdParam("Project id"), taskIdParam("Task id")],
@@ -678,12 +713,7 @@ export const openApiDocument = {
 						required: ["task"],
 					}),
 					...shareableErrorResponses([
-						{
-							status: 409,
-							code: "TASK_VERSION_CONFLICT",
-							message:
-								"The provided version is stale; the task was updated concurrently",
-						},
+						CONCURRENT_MODIFICATION,
 						{
 							status: 409,
 							code: "TASK_BLOCKED",
@@ -697,7 +727,7 @@ export const openApiDocument = {
 				tags: ["Tasks"],
 				summary: "Soft-delete a task",
 				description:
-					"Requires a Bearer JWT with the TASK_DELETE permission (PM). Optimistic locking is enforced via the version query parameter.",
+					"Requires a Bearer JWT with the TASK_DELETE permission (PM). Optimistic locking is enforced via the `version` query parameter: the soft delete is the same atomic compare-and-swap as an update, so a delete and a patch that both start from the same version cannot both succeed, and a stale patch cannot resurrect a deleted task.",
 				operationId: "deleteTask",
 				security: bearerSecurity,
 				parameters: [
@@ -708,19 +738,13 @@ export const openApiDocument = {
 						in: "query",
 						required: true,
 						schema: { type: "integer", minimum: 1 },
-						description: "Expected task version for optimistic locking",
+						description:
+							"Expected current task version for optimistic locking. A mismatch is answered with 409 CONCURRENT_MODIFICATION and the task is not deleted.",
 					},
 				],
 				responses: {
 					"204": { description: "Task soft-deleted, no content" },
-					...shareableErrorResponses([
-						{
-							status: 409,
-							code: "TASK_VERSION_CONFLICT",
-							message:
-								"The provided version is stale; the task was updated concurrently",
-						},
-					]),
+					...shareableErrorResponses([CONCURRENT_MODIFICATION]),
 				},
 			},
 		},
@@ -1335,7 +1359,9 @@ export const openApiDocument = {
 					clientVisible: { type: "boolean" },
 					version: {
 						type: "integer",
-						description: "Optimistic locking version",
+						minimum: 1,
+						description:
+							"Current version of the row. Starts at 1 and increments by exactly 1 on every successful update, including soft delete. Echo it back as `version` on the next PATCH or DELETE.",
 					},
 					createdAt: { type: "string", format: "date-time" },
 					updatedAt: { type: "string", format: "date-time" },
@@ -1384,7 +1410,7 @@ export const openApiDocument = {
 						type: "integer",
 						minimum: 1,
 						description:
-							"Expected current version; must match the stored task version",
+							"Expected current version, taken from the task the client last read. This is a concurrency token, not a field: the server compares it against the stored row and increments it itself, so a client can never set it directly. A mismatch is answered with 409 CONCURRENT_MODIFICATION and no write.",
 					},
 				},
 				required: ["version"],

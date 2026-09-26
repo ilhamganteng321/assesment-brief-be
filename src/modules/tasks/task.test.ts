@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { toTimestamp, toVarchar } from "../../prisma/scalars";
 import type {
 	ProjectAuthorizationContext,
 	TaskAuthorizationContext,
 	UserContext,
 } from "../authorization/authorization.types";
+import { TaskVersionConflictError } from "./task.errors";
 import {
 	canChangeAssignment,
 	canChangeClientVisibility,
@@ -163,6 +165,44 @@ describe("task schema", () => {
 		expect(() => taskDeleteQuerySchema.parse({ version: "-1" })).toThrow();
 		expect(() => taskDeleteQuerySchema.parse({ version: "2.5" })).toThrow();
 		expect(() => taskDeleteQuerySchema.parse({ version: "abc" })).toThrow();
+	});
+
+	test("a lost optimistic-lock race is a 409 that identifies the resource", () => {
+		const conflict = new TaskVersionConflictError("task-7", 5, 6);
+
+		expect(conflict.status).toBe(409);
+		expect(conflict.code).toBe("CONCURRENT_MODIFICATION");
+		expect(conflict.details).toEqual({
+			resourceId: "task-7",
+			taskId: "task-7",
+			expectedVersion: 5,
+			currentVersion: 6,
+		});
+		expect(conflict.message).toBe(
+			"This task has been modified by another user. Please refresh and try again.",
+		);
+	});
+
+	test("a conflict may carry the latest task without leaking a database detail", () => {
+		const latestTask = {
+			id: "task-7",
+			projectId: "proj-1",
+			assignedToId: null,
+			title: toVarchar<200>("Build dashboard"),
+			description: "Create responsive landing page",
+			status: "IN_PROGRESS" as const,
+			priority: "MEDIUM" as const,
+			department: "PRODUCT" as const,
+			clientVisible: false,
+			version: 6,
+			createdAt: toTimestamp("2026-01-01T00:00:00"),
+			updatedAt: toTimestamp("2026-01-01T00:00:00"),
+			isBlocked: false,
+			blockedBy: [],
+		};
+		const conflict = new TaskVersionConflictError("task-7", 5, 6, latestTask);
+
+		expect(conflict.details?.latestTask).toEqual(latestTask);
 	});
 
 	test("list query applies defaults", () => {

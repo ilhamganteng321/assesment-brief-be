@@ -997,9 +997,9 @@ async function verifyAuthzBlocking(
 		body: { title: "Runbook v2", version: 1 },
 	});
 	record(
-		"optimistic: stale version returns TASK_VERSION_CONFLICT",
+		"optimistic: stale version returns CONCURRENT_MODIFICATION",
 		staleEdit.status === 409 &&
-			jsonPath(staleEdit, ["error", "code"]) === "TASK_VERSION_CONFLICT",
+			jsonPath(staleEdit, ["error", "code"]) === "CONCURRENT_MODIFICATION",
 		`status=${staleEdit.status}`,
 	);
 	const freshEdit = await api(`/projects/${projectId}/tasks/${taskCId}`, {
@@ -1871,6 +1871,463 @@ async function verifyDependencyApi(
 	);
 }
 
+/**
+ * Prompt 18 - optimistic concurrency control.
+ *
+ * Every mutation is a compare-and-swap: the expected version travels in the
+ * WHERE clause, so the database -- not the process -- decides the winner. That
+ * is what the checks below exercise. The parallel group is the important one:
+ * eight requests are sent with the same version at the same time and exactly
+ * one may win, which a read-then-write check inside the service could not
+ * guarantee.
+ */
+async function verifyConcurrency(
+	tokenPm: string,
+	tokenEngineer: string,
+	engineerUserId: string,
+	projectId: string,
+): Promise<void> {
+	const patch = (
+		token: string,
+		taskId: string,
+		body: Record<string, unknown>,
+	): Promise<ApiResult> =>
+		api(`/tasks/${taskId}`, { method: "PATCH", token, body });
+
+	/** Stored version, read straight from the row to prove what the API left. */
+	const storedVersion = async (taskId: string): Promise<number | null> => {
+		const row = await db.orm.public.Tasks.where((t) => t.id.eq(taskId)).first();
+		return row?.version ?? null;
+	};
+
+	// --- spec section 27: A then B, both from version 1 ----------------------
+	const sequential = await createTaskFor(
+		tokenPm,
+		projectId,
+		"Sequential race",
+		{
+			description: "Create landing page",
+			assignedToId: engineerUserId,
+		},
+	);
+	const sequentialId = idOf(sequential);
+	if (sequentialId.length === 0) {
+		fail("optimistic: sequential race fixture could not be created");
+		return;
+	}
+
+	const requestA = await patch(tokenPm, sequentialId, {
+		description: "Create responsive landing page",
+		version: 1,
+	});
+	record(
+		"optimistic: request A from version 1 succeeds and reports version 2",
+		requestA.status === 200 &&
+			jsonPath(requestA, ["data", "task", "version"]) === 2,
+		`status=${requestA.status} version=${String(
+			jsonPath(requestA, ["data", "task", "version"]),
+		)}`,
+	);
+
+	const requestB = await patch(tokenEngineer, sequentialId, {
+		status: "IN_PROGRESS",
+		version: 1,
+	});
+	record(
+		"optimistic: request B still on version 1 is rejected with 409",
+		requestB.status === 409 &&
+			jsonPath(requestB, ["error", "code"]) === "CONCURRENT_MODIFICATION",
+		`status=${requestB.status} code=${String(
+			jsonPath(requestB, ["error", "code"]),
+		)}`,
+	);
+
+	const afterRace = await api(`/tasks/${sequentialId}`, { token: tokenPm });
+	record(
+		"optimistic: the rejected request did not overwrite the winner's data",
+		jsonPath(afterRace, ["data", "task", "description"]) ===
+			"Create responsive landing page" &&
+			jsonPath(afterRace, ["data", "task", "version"]) === 2,
+		`description=${String(
+			jsonPath(afterRace, ["data", "task", "description"]),
+		)} version=${String(jsonPath(afterRace, ["data", "task", "version"]))}`,
+	);
+
+	// Section 12: enough information for the client to recover on its own.
+	const conflictPayload = requestB.json as {
+		error?: Record<string, unknown>;
+	} | null;
+	record(
+		"optimistic: the 409 reports the resource and the current version",
+		conflictPayload?.error?.resourceId === sequentialId &&
+			conflictPayload?.error?.expectedVersion === 1 &&
+			conflictPayload?.error?.currentVersion === 2,
+		`error=${JSON.stringify(conflictPayload?.error ?? null)}`,
+	);
+	record(
+		"optimistic: the 409 carries the latest task so the client can refetch",
+		jsonPath(requestB, ["error", "latestTask", "description"]) ===
+			"Create responsive landing page" &&
+			jsonPath(requestB, ["error", "latestTask", "version"]) === 2,
+		`latestTask=${JSON.stringify(conflictPayload?.error?.latestTask ?? null)}`,
+	);
+
+	// --- spec section 6: the database, not the process, picks the winner -----
+	const herd = await createTaskFor(tokenPm, projectId, "Concurrent herd", {
+		assignedToId: engineerUserId,
+	});
+	const herdId = idOf(herd);
+	if (herdId.length === 0) {
+		fail("optimistic: herd fixture could not be created");
+		return;
+	}
+	const herdRacers = await Promise.all(
+		Array.from({ length: 8 }, (_unused, index) =>
+			patch(tokenPm, herdId, {
+				title: `Herd winner ${index}`,
+				version: 1,
+			}),
+		),
+	);
+	const herdWinners = herdRacers.filter((r) => r.status === 200);
+	const herdLosers = herdRacers.filter(
+		(r) =>
+			r.status === 409 &&
+			jsonPath(r, ["error", "code"]) === "CONCURRENT_MODIFICATION",
+	);
+	const herdWinner = herdWinners[0];
+	const afterHerd = await api(`/tasks/${herdId}`, { token: tokenPm });
+	record(
+		"optimistic: 8 simultaneous updates on version 1 produce exactly one winner",
+		herdWinners.length === 1 && herdLosers.length === 7,
+		`winners=${herdWinners.length} conflicts=${herdLosers.length}`,
+	);
+	record(
+		"optimistic: the stored row is the winner's row at version 2",
+		herdWinner !== undefined &&
+			jsonPath(afterHerd, ["data", "task", "title"]) ===
+				jsonPath(herdWinner, ["data", "task", "title"]) &&
+			jsonPath(afterHerd, ["data", "task", "version"]) === 2,
+		`title=${String(jsonPath(afterHerd, ["data", "task", "title"]))} version=${String(
+			jsonPath(afterHerd, ["data", "task", "version"]),
+		)}`,
+	);
+
+	// --- spec section 28: two identical status transitions -------------------
+	const statusRace = await createTaskFor(tokenPm, projectId, "Status race", {
+		status: "TODO",
+		assignedToId: engineerUserId,
+	});
+	const statusRaceId = idOf(statusRace);
+	if (statusRaceId.length === 0) {
+		fail("optimistic: status race fixture could not be created");
+		return;
+	}
+	const statusRacers = await Promise.all([
+		patch(tokenEngineer, statusRaceId, {
+			status: "IN_PROGRESS",
+			version: 1,
+		}),
+		patch(tokenEngineer, statusRaceId, {
+			status: "IN_PROGRESS",
+			version: 1,
+		}),
+	]);
+	record(
+		"optimistic: only one of two identical status changes succeeds",
+		statusRacers.filter((r) => r.status === 200).length === 1 &&
+			statusRacers.filter((r) => r.status === 409).length === 1,
+		`statuses=${statusRacers.map((r) => r.status).join(",")}`,
+	);
+	const afterStatusRace = await api(`/tasks/${statusRaceId}`, {
+		token: tokenPm,
+	});
+	record(
+		"optimistic: the status race leaves the task IN_PROGRESS at version 2",
+		jsonPath(afterStatusRace, ["data", "task", "status"]) === "IN_PROGRESS" &&
+			jsonPath(afterStatusRace, ["data", "task", "version"]) === 2,
+		`status=${String(
+			jsonPath(afterStatusRace, ["data", "task", "status"]),
+		)} version=${String(
+			jsonPath(afterStatusRace, ["data", "task", "version"]),
+		)}`,
+	);
+
+	// --- spec section 29: PM description vs engineer status -----------------
+	// Both cases start from the prompt's version 10, reached by nine successful
+	// updates, which also shows the version increments by exactly one each time.
+	async function buildVersionTenTask(title: string): Promise<string | null> {
+		const built = await createTaskFor(tokenPm, projectId, title, {
+			description: "Initial description",
+			status: "IN_PROGRESS",
+			assignedToId: engineerUserId,
+		});
+		const builtId = idOf(built);
+		if (builtId.length === 0) {
+			return null;
+		}
+		for (let step = 1; step <= 9; step++) {
+			const bump = await patch(tokenPm, builtId, {
+				description: `Initial description r${step}`,
+				version: step,
+			});
+			if (bump.status !== 200) {
+				fail("optimistic: could not walk a task up to version 10", "");
+				return null;
+			}
+		}
+		return builtId;
+	}
+
+	const pmWins = await buildVersionTenTask("PM edit wins");
+	const engineerWins = await buildVersionTenTask("Engineer status wins");
+
+	if (pmWins === null || engineerWins === null) {
+		return;
+	}
+	record(
+		"optimistic: nine successful updates walk version 1 to version 10",
+		(await storedVersion(pmWins)) === 10,
+		`version=${String(await storedVersion(pmWins))}`,
+	);
+
+	const descriptionFirst = await patch(tokenPm, pmWins, {
+		description: "Updated description",
+		version: 10,
+	});
+	const statusSecond = await patch(tokenEngineer, pmWins, {
+		status: "DONE",
+		version: 10,
+	});
+	record(
+		"optimistic: PM description at v10 wins and the engineer at v10 gets 409",
+		descriptionFirst.status === 200 && statusSecond.status === 409,
+		`description=${descriptionFirst.status} status=${statusSecond.status}`,
+	);
+	const afterDescription = await api(`/tasks/${pmWins}`, { token: tokenPm });
+	record(
+		"optimistic: the engineer's stale DONE did not revert the PM's description",
+		jsonPath(afterDescription, ["data", "task", "description"]) ===
+			"Updated description" &&
+			jsonPath(afterDescription, ["data", "task", "status"]) ===
+				"IN_PROGRESS" &&
+			jsonPath(afterDescription, ["data", "task", "version"]) === 11,
+		`description=${String(
+			jsonPath(afterDescription, ["data", "task", "description"]),
+		)} status=${String(
+			jsonPath(afterDescription, ["data", "task", "status"]),
+		)} version=${String(
+			jsonPath(afterDescription, ["data", "task", "version"]),
+		)}`,
+	);
+
+	const statusFirst = await patch(tokenEngineer, engineerWins, {
+		status: "DONE",
+		version: 10,
+	});
+	const descriptionSecond = await patch(tokenPm, engineerWins, {
+		description: "Updated description",
+		version: 10,
+	});
+	record(
+		"optimistic: engineer status at v10 wins and the PM at v10 gets 409",
+		statusFirst.status === 200 && descriptionSecond.status === 409,
+		`status=${statusFirst.status} description=${descriptionSecond.status}`,
+	);
+	const afterStatus = await api(`/tasks/${engineerWins}`, { token: tokenPm });
+	record(
+		"optimistic: the PM's stale edit did not revert the engineer's DONE",
+		jsonPath(afterStatus, ["data", "task", "description"]) ===
+			"Initial description r9" &&
+			jsonPath(afterStatus, ["data", "task", "status"]) === "DONE" &&
+			jsonPath(afterStatus, ["data", "task", "version"]) === 11,
+		`description=${String(
+			jsonPath(afterStatus, ["data", "task", "description"]),
+		)} status=${String(
+			jsonPath(afterStatus, ["data", "task", "status"]),
+		)} version=${String(jsonPath(afterStatus, ["data", "task", "version"]))}`,
+	);
+
+	// --- spec section 10/30: a matching version cannot bypass dependencies ----
+	const prerequisite = await createTaskFor(
+		tokenPm,
+		projectId,
+		"Concurrency prerequisite",
+		{ status: "IN_PROGRESS", assignedToId: engineerUserId },
+	);
+	const blocked = await createTaskFor(
+		tokenPm,
+		projectId,
+		"Concurrency blocked",
+		{
+			status: "TODO",
+			assignedToId: engineerUserId,
+		},
+	);
+	const prerequisiteId = idOf(prerequisite);
+	const blockedId = idOf(blocked);
+	if (prerequisiteId.length === 0 || blockedId.length === 0) {
+		fail("optimistic: dependency fixtures could not be created");
+		return;
+	}
+	for (let step = 1; step <= 4; step++) {
+		const bump = await patch(tokenPm, blockedId, {
+			title: `Concurrency blocked r${step}`,
+			version: step,
+		});
+		if (bump.status !== 200) {
+			fail("optimistic: could not walk the blocked task to version 5", "");
+			return;
+		}
+	}
+	const wired = await api(`/tasks/${blockedId}/dependencies`, {
+		method: "POST",
+		token: tokenPm,
+		body: { dependencyTaskId: prerequisiteId },
+	});
+	record(
+		"optimistic: the dependency fixture is wired",
+		wired.status === 201,
+		`status=${wired.status}`,
+	);
+
+	const blockedStart = await patch(tokenEngineer, blockedId, {
+		status: "IN_PROGRESS",
+		version: 5,
+	});
+	record(
+		"optimistic: a correct version cannot bypass the dependency rule",
+		blockedStart.status === 409 &&
+			jsonPath(blockedStart, ["error", "code"]) === "TASK_BLOCKED",
+		`status=${blockedStart.status} code=${String(
+			jsonPath(blockedStart, ["error", "code"]),
+		)}`,
+	);
+	record(
+		"optimistic: the rejected start left the version at 5",
+		(await storedVersion(blockedId)) === 5,
+		`version=${String(await storedVersion(blockedId))}`,
+	);
+
+	// --- spec section 19: the version is a guard, never a field -------------
+	const versionWrite = await patch(tokenPm, blockedId, {
+		title: "Attempted version write",
+		version: 999999,
+	});
+	const afterVersionWrite = await api(`/tasks/${blockedId}`, {
+		token: tokenPm,
+	});
+	record(
+		"optimistic: a client cannot set the version directly",
+		versionWrite.status === 409 &&
+			jsonPath(afterVersionWrite, ["data", "task", "version"]) === 5 &&
+			jsonPath(afterVersionWrite, ["data", "task", "title"]) ===
+				"Concurrency blocked r4",
+		`status=${versionWrite.status} version=${String(
+			jsonPath(afterVersionWrite, ["data", "task", "version"]),
+		)}`,
+	);
+
+	// --- spec section 5: the version is validated, not coerced ---------------
+	const stringVersion = await patch(tokenPm, blockedId, {
+		title: "String version",
+		version: "5",
+	});
+	const floatVersion = await patch(tokenPm, blockedId, {
+		title: "Float version",
+		version: 5.5,
+	});
+	const zeroVersion = await patch(tokenPm, blockedId, {
+		title: "Zero version",
+		version: 0,
+	});
+	const missingVersion = await patch(tokenPm, blockedId, {
+		title: "No version",
+	});
+	record(
+		"optimistic: version must be an integer, not a numeric string",
+		stringVersion.status === 400 &&
+			floatVersion.status === 400 &&
+			zeroVersion.status === 400,
+		`string=${stringVersion.status} float=${floatVersion.status} zero=${zeroVersion.status}`,
+	);
+	record(
+		"optimistic: an update without a version is rejected",
+		missingVersion.status === 400,
+		`status=${missingVersion.status}`,
+	);
+	record(
+		"optimistic: an invalid version never reaches the row",
+		(await storedVersion(blockedId)) === 5,
+		`version=${String(await storedVersion(blockedId))}`,
+	);
+
+	// --- spec section 20: soft delete is concurrency-safe -------------------
+	const deleteRace = await createTaskFor(tokenPm, projectId, "Delete race", {
+		assignedToId: engineerUserId,
+	});
+	const deleteRaceId = idOf(deleteRace);
+	if (deleteRaceId.length === 0) {
+		fail("optimistic: delete race fixture could not be created");
+		return;
+	}
+	const deleted = await api(`/tasks/${deleteRaceId}?version=1`, {
+		method: "DELETE",
+		token: tokenPm,
+	});
+	const resurrect = await patch(tokenEngineer, deleteRaceId, {
+		title: "Zombie",
+		version: 1,
+	});
+	const readDeleted = await api(`/tasks/${deleteRaceId}`, { token: tokenPm });
+	record(
+		"optimistic: delete at v1 succeeds and a stale patch at v1 is rejected",
+		deleted.status === 204 &&
+			(resurrect.status === 409 || resurrect.status === 404),
+		`delete=${deleted.status} patch=${resurrect.status}`,
+	);
+	record(
+		"optimistic: a deleted task stays deleted and hidden from normal reads",
+		readDeleted.status === 404 &&
+			jsonPath(readDeleted, ["error", "code"]) === "TASK_NOT_FOUND",
+		`status=${readDeleted.status} code=${String(
+			jsonPath(readDeleted, ["error", "code"]),
+		)}`,
+	);
+
+	// The mirror image: the patch lands first, so the delete is the loser.
+	const deleteLoser = await createTaskFor(tokenPm, projectId, "Delete loser", {
+		assignedToId: engineerUserId,
+	});
+	const deleteLoserId = idOf(deleteLoser);
+	if (deleteLoserId.length === 0) {
+		fail("optimistic: delete loser fixture could not be created");
+		return;
+	}
+	const winner = await patch(tokenPm, deleteLoserId, {
+		title: "Patched first",
+		version: 1,
+	});
+	const staleDelete = await api(`/tasks/${deleteLoserId}?version=1`, {
+		method: "DELETE",
+		token: tokenPm,
+	});
+	record(
+		"optimistic: a patch at v1 beats a delete still holding v1",
+		winner.status === 200 &&
+			staleDelete.status === 409 &&
+			jsonPath(staleDelete, ["error", "code"]) === "CONCURRENT_MODIFICATION",
+		`patch=${winner.status} delete=${staleDelete.status} code=${String(
+			jsonPath(staleDelete, ["error", "code"]),
+		)}`,
+	);
+	record(
+		"optimistic: the losing delete did not remove the patched task",
+		(await storedVersion(deleteLoserId)) === 2,
+		`version=${String(await storedVersion(deleteLoserId))}`,
+	);
+}
+
 async function verifyFlatTaskApi(
 	tokenPm: string,
 	tokenInternal: string,
@@ -2243,6 +2700,12 @@ async function main(): Promise<void> {
 			fixture.depProjectId,
 			backend.userId,
 			fixture.clientUserId,
+		);
+		await verifyConcurrency(
+			fixture.tokenPm,
+			backend.token,
+			backend.userId,
+			fixture.depProjectId,
 		);
 	} catch (error) {
 		fail(
