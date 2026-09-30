@@ -9,8 +9,13 @@ import {
 	dependencyRoutes,
 	flatDependencyRoutes,
 } from "../modules/dependencies/dependency.routes";
+import {
+	flatInvitationRoutes,
+	projectInvitationRoutes,
+} from "../modules/invitations/invitation.routes";
 import { projectRoutes } from "../modules/projects/project.routes";
 import { flatTaskRoutes, taskRoutes } from "../modules/tasks/task.routes";
+import { userRoutes } from "../modules/users/user.routes";
 import { devRoutes } from "./dev";
 import { docsRoutes } from "./docs";
 import { healthRoutes } from "./health";
@@ -22,6 +27,8 @@ routes.route("/health", healthRoutes);
 routes.route("/auth", authRoutes);
 
 routes.route("/projects", projectRoutes);
+
+routes.route("/projects", projectInvitationRoutes);
 
 routes.route("/projects", taskRoutes);
 
@@ -35,7 +42,11 @@ routes.route("/projects", auditRoutes);
 
 routes.route("/projects", attachmentRoutes);
 
+routes.route("/", flatInvitationRoutes);
+
 routes.route("/client", clientRoutes);
+
+routes.route("/users", userRoutes);
 
 if (env.NODE_ENV !== "production") {
 	routes.route("/dev", devRoutes);

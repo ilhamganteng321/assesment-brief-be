@@ -67,18 +67,50 @@ export const createProjectSchema = z.strictObject({
 
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 
-export const updateProjectSchema = z
-	.strictObject({
-		name: nameSchema.optional(),
-		description: descriptionSchema,
-		clientName: clientNameSchema,
-		status: statusSchema.optional(),
-	})
+/**
+ * The editable project metadata, and nothing else.
+ *
+ * The general update route copies these three fields one at a time into the
+ * database write and types the result as a partial project row, so a request can
+ * never carry a column through that the product does not expose. The single
+ * lifecycle field is handled separately, by the status route.
+ */
+const projectMetadataSchema = z.strictObject({
+	name: nameSchema.optional(),
+	description: descriptionSchema,
+	clientName: clientNameSchema,
+});
+
+/**
+ * The body accepted by `PATCH /projects/:projectId`.
+ *
+ * `status` is accepted here so the existing single-update route keeps working,
+ * but the lifecycle rule is applied to it on the way through, so this route is
+ * not a way around the dedicated status endpoint. Anything the product does not
+ * expose is rejected outright rather than ignored.
+ */
+export const updateProjectRequestSchema = projectMetadataSchema
+	.extend({ status: statusSchema.optional() })
 	.refine((input) => Object.keys(input).length > 0, {
 		message: "At least one field must be provided",
 	});
 
-export type UpdateProjectInput = z.infer<typeof updateProjectSchema>;
+export type UpdateProjectInput = z.infer<typeof updateProjectRequestSchema>;
+
+/**
+ * The body accepted by `PATCH /projects/:projectId/status`.
+ *
+ * A single required field, so a status change is a lifecycle move and nothing
+ * else. Metadata belongs to the general update route; mixing the two here would
+ * mean a "status" request could quietly rename a project.
+ */
+export const updateProjectStatusSchema = z.strictObject({
+	status: statusSchema,
+});
+
+export type UpdateProjectStatusInput = z.infer<
+	typeof updateProjectStatusSchema
+>;
 
 export type ProjectFilters = Partial<
 	Record<
@@ -136,6 +168,54 @@ export const addProjectMemberSchema = z.strictObject({
 });
 
 export type AddProjectMemberInput = z.infer<typeof addProjectMemberSchema>;
+
+/**
+ * Minimum characters before a candidate search is worth running.
+ *
+ * A shorter prefix matches most of the organisation, so the request would cost
+ * the server a scan and tell the caller nothing they did not already know. The
+ * endpoint returns an empty page below this rather than erroring, so a caller
+ * that asks anyway gets an answer instead of a 400.
+ */
+export const MIN_MEMBER_CANDIDATE_SEARCH = 2;
+
+/** Page size for a candidate search. Small: it backs a typeahead, not a report. */
+export const MAX_MEMBER_CANDIDATE_ROWS = 20;
+
+/**
+ * The query contract for `GET /projects/:projectId/members/candidates`.
+ *
+ * A plain `search` plus paging rather than the full list-query contract, because
+ * this backs a typeahead over one project: there is nothing to filter by, order
+ * by, or range over, and the searchable surface is a name and an email matched
+ * together. The candidate set is the whole organisation, so it is searched and
+ * paged on the server — the browser is never handed the user table to filter.
+ */
+export const projectMemberCandidatesQuerySchema = z.strictObject({
+	search: z
+		.string()
+		.trim()
+		.max(150, "search must be at most 150 characters")
+		.default(""),
+	page: z.coerce
+		.number()
+		.int("page must be an integer")
+		.min(1, "page must be at least 1")
+		.default(1),
+	rows: z.coerce
+		.number()
+		.int("rows must be an integer")
+		.min(1, "rows must be at least 1")
+		.max(
+			MAX_MEMBER_CANDIDATE_ROWS,
+			`rows must be at most ${MAX_MEMBER_CANDIDATE_ROWS}`,
+		)
+		.default(10),
+});
+
+export type ProjectMemberCandidatesQuery = z.infer<
+	typeof projectMemberCandidatesQuerySchema
+>;
 
 /**
  * Paging for the project activity feed. The cap keeps one request from pulling an

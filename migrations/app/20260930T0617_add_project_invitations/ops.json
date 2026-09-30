@@ -1,0 +1,381 @@
+[
+  {
+    "id": "createNativeEnumType.invitation_status",
+    "label": "Create enum type \"invitation_status\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "type",
+        "name": "invitation_status"
+      }
+    },
+    "precheck": [],
+    "execute": [
+      {
+        "description": "create enum type \"invitation_status\"",
+        "sql": "CREATE TYPE \"public\".\"invitation_status\" AS ENUM ('PENDING', 'ACCEPTED', 'EXPIRED', 'CANCELED')",
+        "params": []
+      }
+    ],
+    "postcheck": []
+  },
+  {
+    "id": "table.project_invitations",
+    "label": "Create table \"project_invitations\"",
+    "summary": "Creates table \"project_invitations\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "table",
+        "name": "project_invitations"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure table \"project_invitations\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"project_invitations\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create table \"project_invitations\"",
+        "sql": "CREATE TABLE \"public\".\"project_invitations\" (\n  \"accepted_at\" timestamp,\n  \"created_at\" timestamp DEFAULT (now()) NOT NULL,\n  \"email\" character varying(255) NOT NULL,\n  \"expires_at\" timestamp NOT NULL,\n  \"id\" uuid DEFAULT (gen_random_uuid()) NOT NULL,\n  \"invited_by_id\" uuid NOT NULL,\n  \"project_id\" uuid NOT NULL,\n  \"status\" \"invitation_status\" DEFAULT 'PENDING'::\"invitation_status\" NOT NULL,\n  \"token_hash\" character varying(64) NOT NULL,\n  \"updated_at\" timestamp DEFAULT (now()) NOT NULL,\n  CONSTRAINT \"project_invitations_pkey\" PRIMARY KEY (\"id\")\n)",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify table \"project_invitations\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"project_invitations\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.project_invitations.project_invitations_expires_at_idx",
+    "label": "Create index \"project_invitations_expires_at_idx\" on \"project_invitations\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "project_invitations_expires_at_idx",
+        "table": "project_invitations"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"project_invitations_expires_at_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"project_invitations_expires_at_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"project_invitations_expires_at_idx\"",
+        "sql": "CREATE INDEX \"project_invitations_expires_at_idx\" ON \"public\".\"project_invitations\" (\"expires_at\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"project_invitations_expires_at_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"project_invitations_expires_at_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.project_invitations.project_invitations_invited_by_id_idx",
+    "label": "Create index \"project_invitations_invited_by_id_idx\" on \"project_invitations\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "project_invitations_invited_by_id_idx",
+        "table": "project_invitations"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"project_invitations_invited_by_id_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"project_invitations_invited_by_id_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"project_invitations_invited_by_id_idx\"",
+        "sql": "CREATE INDEX \"project_invitations_invited_by_id_idx\" ON \"public\".\"project_invitations\" (\"invited_by_id\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"project_invitations_invited_by_id_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"project_invitations_invited_by_id_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.project_invitations.project_invitations_project_id_email_idx",
+    "label": "Create index \"project_invitations_project_id_email_idx\" on \"project_invitations\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "project_invitations_project_id_email_idx",
+        "table": "project_invitations"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"project_invitations_project_id_email_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"project_invitations_project_id_email_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"project_invitations_project_id_email_idx\"",
+        "sql": "CREATE INDEX \"project_invitations_project_id_email_idx\" ON \"public\".\"project_invitations\" (\"project_id\", \"email\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"project_invitations_project_id_email_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"project_invitations_project_id_email_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.project_invitations.project_invitations_project_id_idx",
+    "label": "Create index \"project_invitations_project_id_idx\" on \"project_invitations\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "project_invitations_project_id_idx",
+        "table": "project_invitations"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"project_invitations_project_id_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"project_invitations_project_id_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"project_invitations_project_id_idx\"",
+        "sql": "CREATE INDEX \"project_invitations_project_id_idx\" ON \"public\".\"project_invitations\" (\"project_id\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"project_invitations_project_id_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"project_invitations_project_id_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.project_invitations.project_invitations_project_id_status_idx",
+    "label": "Create index \"project_invitations_project_id_status_idx\" on \"project_invitations\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "project_invitations_project_id_status_idx",
+        "table": "project_invitations"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"project_invitations_project_id_status_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"project_invitations_project_id_status_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"project_invitations_project_id_status_idx\"",
+        "sql": "CREATE INDEX \"project_invitations_project_id_status_idx\" ON \"public\".\"project_invitations\" (\"project_id\", \"status\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"project_invitations_project_id_status_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"project_invitations_project_id_status_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "index.project_invitations.project_invitations_token_hash_idx",
+    "label": "Create index \"project_invitations_token_hash_idx\" on \"project_invitations\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "index",
+        "name": "project_invitations_token_hash_idx",
+        "table": "project_invitations"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure index \"project_invitations_token_hash_idx\" does not exist",
+        "sql": "SELECT (to_regclass($1)) IS NULL AS \"result\"",
+        "params": [
+          "\"public\".\"project_invitations_token_hash_idx\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "create index \"project_invitations_token_hash_idx\"",
+        "sql": "CREATE UNIQUE INDEX \"project_invitations_token_hash_idx\" ON \"public\".\"project_invitations\" (\"token_hash\")",
+        "params": []
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify index \"project_invitations_token_hash_idx\" exists",
+        "sql": "SELECT (to_regclass($1)) IS NOT NULL AS \"result\"",
+        "params": [
+          "\"public\".\"project_invitations_token_hash_idx\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.project_invitations.project_invitations_project_id_fkey",
+    "label": "Add foreign key \"project_invitations_project_id_fkey\" on \"project_invitations\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "project_invitations_project_id_fkey",
+        "table": "project_invitations"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"project_invitations_project_id_fkey\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "project_invitations_project_id_fkey",
+          "public",
+          "\"public\".\"project_invitations\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"project_invitations_project_id_fkey\"",
+        "sql": "ALTER TABLE \"public\".\"project_invitations\"\nADD CONSTRAINT \"project_invitations_project_id_fkey\"\nFOREIGN KEY (\"project_id\")\nREFERENCES \"public\".\"projects\" (\"id\")\nON DELETE CASCADE"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"project_invitations_project_id_fkey\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "project_invitations_project_id_fkey",
+          "public",
+          "\"public\".\"project_invitations\""
+        ]
+      }
+    ]
+  },
+  {
+    "id": "foreignKey.project_invitations.project_invitations_invited_by_id_fkey",
+    "label": "Add foreign key \"project_invitations_invited_by_id_fkey\" on \"project_invitations\"",
+    "operationClass": "additive",
+    "target": {
+      "id": "postgres",
+      "details": {
+        "schema": "public",
+        "objectType": "foreignKey",
+        "name": "project_invitations_invited_by_id_fkey",
+        "table": "project_invitations"
+      }
+    },
+    "precheck": [
+      {
+        "description": "ensure FK \"project_invitations_invited_by_id_fkey\" does not exist",
+        "sql": "SELECT NOT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "project_invitations_invited_by_id_fkey",
+          "public",
+          "\"public\".\"project_invitations\""
+        ]
+      }
+    ],
+    "execute": [
+      {
+        "description": "add FK \"project_invitations_invited_by_id_fkey\"",
+        "sql": "ALTER TABLE \"public\".\"project_invitations\"\nADD CONSTRAINT \"project_invitations_invited_by_id_fkey\"\nFOREIGN KEY (\"invited_by_id\")\nREFERENCES \"public\".\"users\" (\"id\")\nON DELETE RESTRICT"
+      }
+    ],
+    "postcheck": [
+      {
+        "description": "verify FK \"project_invitations_invited_by_id_fkey\" exists",
+        "sql": "SELECT EXISTS (SELECT 1 AS \"one\" FROM \"pg_constraint\" AS \"c\" INNER JOIN \"pg_namespace\" AS \"n\" ON \"n\".\"oid\" = \"c\".\"connamespace\" WHERE (\"c\".\"conname\" = $1 AND \"n\".\"nspname\" = $2 AND \"c\".\"conrelid\" = to_regclass($3))) AS \"result\"",
+        "params": [
+          "project_invitations_invited_by_id_fkey",
+          "public",
+          "\"public\".\"project_invitations\""
+        ]
+      }
+    ]
+  }
+]

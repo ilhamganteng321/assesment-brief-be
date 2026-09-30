@@ -638,8 +638,14 @@ async function verifyProjectListContract(
 			pagination !== undefined &&
 			pagination.page === 1 &&
 			pagination.limit === 20 &&
-			pagination.total === (projects?.length ?? -1),
-		`status=${defaultList.status} total=${pagination?.total ?? "n/a"}`,
+			// `total` is the size of the whole matching set, which is at least the rows
+			// on this page. The stricter `total === projects.length` held only while
+			// every project in the database fitted inside one page; once it outgrew the
+			// limit — which a seeded environment reaches on its own — the two are
+			// legitimately different numbers, and the envelope is what is being tested.
+			pagination.total >= projects.length &&
+			projects.length <= pagination.limit,
+		`status=${defaultList.status} total=${pagination?.total ?? "n/a"} page=${projects?.length ?? "n/a"}`,
 	);
 
 	const projectFields = Object.keys(
@@ -822,14 +828,43 @@ async function verifyProjectListContract(
 		`statuses=${invalidParams.map((r) => r.status).join(",")}`,
 	);
 
-	const archived = await api(`/projects/${listProjectId}`, {
+	// The lifecycle only moves forward one step at a time, so the list fixture
+	// walks it rather than jumping to the end. The intermediate statuses are the
+	// real assertions; the final one only puts the project into the state the
+	// soft-delete check below needs.
+	const renamed = await api(`/projects/${listProjectId}`, {
+		method: "PATCH",
+		token: tokenPm,
+		body: { clientName: "It Renamed Client" },
+	});
+	record(
+		"list: PM can update a project",
+		renamed.status === 200,
+		`status=${renamed.status}`,
+	);
+
+	const skippedStep = await api(`/projects/${listProjectId}/status`, {
 		method: "PATCH",
 		token: tokenPm,
 		body: { status: "ARCHIVED" },
 	});
 	record(
-		"list: PM can update a project",
-		archived.status === 200,
+		"lifecycle: PLANNING cannot skip straight to ARCHIVED",
+		skippedStep.status === 409 &&
+			jsonPath(skippedStep, ["error", "code"]) ===
+				"INVALID_PROJECT_STATUS_TRANSITION",
+		`status=${skippedStep.status}`,
+	);
+
+	const archived = await api(`/projects/${listProjectId}`, {
+		method: "PATCH",
+		token: tokenPm,
+		body: { status: "ACTIVE" },
+	});
+	record(
+		"lifecycle: PM can move a project forward one step",
+		archived.status === 200 &&
+			jsonPath(archived, ["data", "project", "status"]) === "ACTIVE",
 		`status=${archived.status}`,
 	);
 

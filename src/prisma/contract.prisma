@@ -19,6 +19,11 @@ namespace public {
     updatedAt     Timestamp     @default(now()) @map("updated_at")
 
     projectMembers ProjectMembers[]
+    // The relation field is named for the direction it reads from, since a user can
+    // both receive and send invitations but only sends the ones this model
+    // records. No `@map`: this contract does not support the attribute on a
+    // relation field, and the physical name lives on the owning model anyway.
+    sentProjectInvitations ProjectInvitations[]
     assignedTasks  Tasks[]
     auditLogs      AuditLogs[]
     attachments    Attachments[]
@@ -46,6 +51,7 @@ namespace public {
     deletedAt   Timestamp?          @map("deleted_at")
 
     members     ProjectMembers[]
+    invitations ProjectInvitations[]
     tasks       Tasks[]
 
     @@index([status], map: "projects_status_idx")
@@ -316,8 +322,80 @@ namespace public {
 
 
   // ============================================================
+  // PROJECT INVITATIONS
+  // ============================================================
+
+  // An invitation is addressed to an *email*, not to a user, because the point of
+  // the feature is reaching somebody who has no account yet. There is deliberately
+  // no `userId`: adding one would either have to be null until acceptance or would
+  // have to be filled in by guessing who the address belongs to. The recipient is
+  // resolved by email at acceptance time, once there is a real account to resolve
+  // to, and only then does a ProjectMembers row appear.
+  model ProjectInvitations {
+    id          Uuid           @id(map: "project_invitations_pkey") @default(dbgenerated("gen_random_uuid()"))
+    projectId   Uuid           @map("project_id")
+    email       VarChar(255)
+    invitedById Uuid           @map("invited_by_id")
+
+    // The hash of the emailed token, never the token itself. The raw value exists
+    // only in the recipient's inbox, which is what makes a database disclosure
+    // useless for accepting someone else's invitation.
+    tokenHash   VarChar(64)    @map("token_hash")
+    status      pg.enum(InvitationStatus) @default("PENDING")
+    expiresAt   Timestamp      @map("expires_at")
+    acceptedAt  Timestamp?     @map("accepted_at")
+
+    createdAt   Timestamp      @default(now()) @map("created_at")
+    updatedAt   Timestamp      @default(now()) @map("updated_at")
+
+    project Projects @relation(
+      fields: [projectId],
+      references: [id],
+      onDelete: Cascade,
+      map: "project_invitations_project_id_fkey",
+      index: false
+    )
+
+    invitedBy Users @relation(
+      fields: [invitedById],
+      references: [id],
+      onDelete: Restrict,
+      map: "project_invitations_invited_by_id_fkey",
+      index: false
+    )
+
+    // Acceptance looks an invitation up by the hash of the token, so this index
+    // is on the hot path for every accept attempt and is unique: two invitations
+    // sharing a token would mean two accounts could claim the same one.
+    @@index([tokenHash], map: "project_invitations_token_hash_idx", unique: true)
+    @@index([projectId], map: "project_invitations_project_id_idx")
+    // The "is this address already invited" check and the resend/cancel paths all
+    // narrow by project and email together.
+    @@index([projectId, email], map: "project_invitations_project_id_email_idx")
+    @@index([projectId, status], map: "project_invitations_project_id_status_idx")
+    @@index([expiresAt], map: "project_invitations_expires_at_idx")
+    @@index([invitedById], map: "project_invitations_invited_by_id_idx")
+
+    @@map("project_invitations")
+  }
+
+
+  // ============================================================
   // ENUMS
   // ============================================================
+
+  // The four states an invitation can be in. A pending invitation that has passed
+  // its expiry is reported as EXPIRED even before anything writes the row, so the
+  // status is a description of whether the link works rather than a promise that
+  // something will eventually update it.
+  native_enum InvitationStatus {
+    PENDING = "PENDING"
+    ACCEPTED = "ACCEPTED"
+    EXPIRED = "EXPIRED"
+    CANCELED = "CANCELED"
+
+    @@map("invitation_status")
+  }
 
   native_enum Role {
     PM = "PM"

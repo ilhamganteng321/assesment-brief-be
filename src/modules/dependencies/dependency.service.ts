@@ -29,7 +29,10 @@ import type {
 	TaskDependencyRecord,
 } from "./dependency.types";
 
-type ProjectRow = Omit<Models.public_Projects, "members" | "tasks">;
+type ProjectRow = Omit<
+	Models.public_Projects,
+	"members" | "tasks" | "invitations"
+>;
 
 /**
  * The only task fields the dependency graph needs. Narrower than `TaskRecord`

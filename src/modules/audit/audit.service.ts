@@ -24,7 +24,10 @@ import type {
 	TaskAuditSnapshot,
 } from "./audit.types";
 
-type ProjectRow = Omit<Models.public_Projects, "members" | "tasks">;
+type ProjectRow = Omit<
+	Models.public_Projects,
+	"members" | "tasks" | "invitations"
+>;
 
 async function findVisibleProject(
 	projectId: string,

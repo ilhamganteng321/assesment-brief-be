@@ -127,9 +127,16 @@ describe("environment schema", () => {
 	});
 
 	describe("production only rules", () => {
+		// `EMAIL_PROVIDER` is part of the base because a production deployment must
+		// name a real transport: `log` writes a live acceptance token to stdout and
+		// `memory` delivers nothing, so both are refused at boot. The rule itself is
+		// pinned in the "invitation email transport" block below; carrying the value
+		// here keeps these cases about the secret and the origin, which is what they
+		// were written to check.
 		const production = {
 			NODE_ENV: "production",
 			FRONTEND_URL: "https://app.example.com",
+			EMAIL_PROVIDER: "smtp",
 		} as const;
 
 		test("a production environment with a long secret and an origin is accepted", () => {
@@ -174,6 +181,7 @@ describe("environment schema", () => {
 				issuesFor({
 					NODE_ENV: "production",
 					CORS_ORIGIN: "https://app.example.com",
+					EMAIL_PROVIDER: "smtp",
 				}),
 			).toEqual([]);
 		});
@@ -188,6 +196,67 @@ describe("environment schema", () => {
 		});
 	});
 
+	// Which transport sends the email is a security decision, not a preference. The
+	// default writes the acceptance link — a live token — to stdout so a developer
+	// can follow the flow without a mailbox, and the in-memory one delivers nothing
+	// at all, which would have a project manager reporting "invitation sent" to a
+	// recipient who will never receive one. Both are fine in development and
+	// neither is fine in production, so production has to say so at boot.
+	describe("invitation email transport", () => {
+		const production = {
+			NODE_ENV: "production",
+			FRONTEND_URL: "https://app.example.com",
+		} as const;
+
+		test("the log provider is refused in production", () => {
+			const found = issuesFor({ ...production });
+
+			expect(found.some((issue) => issue.path === "EMAIL_PROVIDER")).toBe(true);
+		});
+
+		test("the in-memory provider is refused in production", () => {
+			const found = issuesFor({ ...production, EMAIL_PROVIDER: "memory" });
+
+			expect(found.some((issue) => issue.path === "EMAIL_PROVIDER")).toBe(true);
+		});
+
+		test("a real transport is accepted in production", () => {
+			expect(issuesFor({ ...production, EMAIL_PROVIDER: "smtp" })).toEqual([]);
+		});
+
+		test("both development providers are tolerated outside production", () => {
+			// A developer following the flow by hand needs one of these, and the rule
+			// above is what keeps the tolerance from following a deployment.
+			expect(issuesFor({ EMAIL_PROVIDER: "log" })).toEqual([]);
+			expect(issuesFor({ EMAIL_PROVIDER: "memory" })).toEqual([]);
+		});
+
+		test("an unknown provider is refused", () => {
+			const found = issuesFor({ EMAIL_PROVIDER: "carrier-pigeon" });
+
+			expect(found.some((issue) => issue.path === "EMAIL_PROVIDER")).toBe(true);
+		});
+
+		test("the sender address must be a valid email", () => {
+			const found = issuesFor({ MAIL_FROM: "not-an-address" });
+
+			expect(found.some((issue) => issue.path === "MAIL_FROM")).toBe(true);
+		});
+
+		test("the invitation lifetime is bounded", () => {
+			// An invitation is a standing grant to join a project, so a leaked inbox
+			// stays a way in for as long as the link is valid. The ceiling is the
+			// reason a leaked message is eventually worthless.
+			expect(issuesFor({ INVITATION_TTL_DAYS: 0 }).length).toBeGreaterThan(0);
+			expect(issuesFor({ INVITATION_TTL_DAYS: 91 }).length).toBeGreaterThan(0);
+			expect(issuesFor({ INVITATION_TTL_DAYS: 90 })).toEqual([]);
+		});
+
+		test("the default lifetime is seven days", () => {
+			expect(envSchema.parse(valid).INVITATION_TTL_DAYS).toBe(7);
+		});
+	});
+
 	// A malformed origin produces no CORS header at all, so the deployed
 	// frontend is refused by every request while the symptom points at the
 	// browser. Catching it at boot is the difference between a five-second fix
@@ -196,6 +265,7 @@ describe("environment schema", () => {
 		const base = {
 			NODE_ENV: "production",
 			JWT_SECRET: "x".repeat(32),
+			EMAIL_PROVIDER: "smtp",
 		} as const;
 
 		for (const label of [
@@ -276,6 +346,10 @@ describe("environment schema: the CORS alias pair", () => {
 		DATABASE_URL: "postgresql://user:password@localhost:5432/app",
 		JWT_SECRET: "x".repeat(32),
 		NODE_ENV: "production",
+		// Carried in the base so these cases stay about the CORS alias pair; a
+		// production deployment must also name a real mail transport, which has its
+		// own block in the suite above.
+		EMAIL_PROVIDER: "smtp",
 	} as const;
 
 	const issuesForProduction = (

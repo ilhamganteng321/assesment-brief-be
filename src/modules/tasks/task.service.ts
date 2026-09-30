@@ -1,4 +1,5 @@
 import { param } from "@prisma/orm-family-sql/relational-core/expression";
+import { or } from "@prisma/orm-postgres/orm-client";
 import type { Models } from "../../prisma/contract";
 import { db } from "../../prisma/db";
 import {
@@ -18,7 +19,11 @@ import {
 	ProjectNotFoundError,
 	ProjectUserNotFoundError,
 } from "../projects/project.errors";
-import { toTaskDetailResponse, toTaskResponse } from "./task.dto";
+import {
+	type AssigneeLookup,
+	toTaskDetailResponse,
+	toTaskResponse,
+} from "./task.dto";
 import {
 	TaskAccessDeniedError,
 	TaskAlreadyDeletedError,
@@ -45,6 +50,7 @@ import {
 	createTaskSchema,
 	DEFAULT_TASK_LIST_QUERY,
 	TASK_DEPARTMENTS,
+	UNASSIGNED_FILTER_VALUE,
 	updateTaskSchema,
 } from "./task.schema";
 import type {
@@ -135,7 +141,10 @@ const EMPTY_BLOCKING_STATE: TaskBlockingState = {
 	blockedBy: [],
 };
 
-type ProjectRow = Omit<Models.public_Projects, "members" | "tasks">;
+type ProjectRow = Omit<
+	Models.public_Projects,
+	"members" | "tasks" | "invitations"
+>;
 
 async function findVisibleProject(
 	projectId: string,
@@ -209,8 +218,82 @@ async function assertValidAssignee(
 		id: target.id,
 		name: target.name,
 		email: target.email,
+		role: target.role,
 		department: target.department,
 	};
+}
+
+/**
+ * Resolves the assignee summaries for a whole page of tasks in one query.
+ *
+ * The alternative — a lookup per task — is the N+1 this exists to avoid, and on a
+ * twenty-row page it would mean twenty extra round trips before the browser could
+ * draw a name. Distinct ids are collapsed first, so twenty tasks with one assignee
+ * is one query returning one row, and a page with no assignee at all is no query.
+ *
+ * Columns are named one by one rather than selecting the row, for the same reason
+ * the member list does it: `passwordHash` is never read from the database, so it
+ * cannot be logged or leaked by a later edit to a response builder.
+ */
+async function loadAssigneeSummaries(
+	tasks: readonly Pick<TaskRecord, "assignedToId">[],
+): Promise<AssigneeLookup> {
+	const ids = [
+		...new Set(
+			tasks
+				.map((task) => task.assignedToId)
+				.filter((id): id is string => id !== null),
+		),
+	];
+	if (ids.length === 0) {
+		return new Map();
+	}
+	const rows = await db.orm.public.Users.where((user) => user.id.in(ids))
+		.select("id", "name", "email", "role", "department")
+		.all();
+	return new Map(rows.map((row) => [row.id, row]));
+}
+
+/**
+ * Pushes an assignee filter into the query, including the "nobody" case.
+ *
+ * One place for the predicate, because there are two list implementations (the
+ * project-scoped one and the flat cross-project one) and a filter that meant
+ * "no assignee" in one of them and "a user literally called unassigned" in the
+ * other would be the kind of bug that only shows up on whichever list nobody was
+ * looking at.
+ *
+ * The sentinel is resolved to `IS NULL`, and mixing it with uuids in one request is
+ * a disjunction rather than an error: `assignedToId=unassigned&assignedToId=<uuid>`
+ * legitimately means "unassigned, or assigned to this person", and rejecting it
+ * would make a combined view impossible to ask for.
+ */
+function applyAssigneeFilter(
+	collection: ReturnType<typeof db.orm.public.Tasks.where>,
+	value: string | readonly string[],
+): ReturnType<typeof db.orm.public.Tasks.where> {
+	const requested = asArray(value as string | string[]);
+	const ids = (requested ?? []).filter(
+		(candidate) => candidate !== UNASSIGNED_FILTER_VALUE,
+	);
+	const includesUnassigned = (requested ?? []).includes(
+		UNASSIGNED_FILTER_VALUE,
+	);
+
+	if (includesUnassigned && ids.length === 0) {
+		return collection.where((task) => task.assignedToId.isNull());
+	}
+	if (!includesUnassigned) {
+		return collection.where((task) => task.assignedToId.in(ids));
+	}
+	// Both halves requested. A nullable column cannot use `IN` to mean "or null", so
+	// the disjunction is written out. `or(...)` rather than a JavaScript `||`
+	// between the two predicates: the ORM compares the *expression objects* there,
+	// which are always distinct, so `a || b` would silently narrow to nothing and
+	// report a confidently empty page.
+	return collection.where((task) =>
+		or(task.assignedToId.isNull(), task.assignedToId.in(ids)),
+	);
 }
 
 /**
@@ -295,7 +378,7 @@ export async function listTasks(
 		collection = collection.where((task) => task.status.eq(status));
 	}
 	if (assignedToId !== undefined) {
-		collection = collection.where((task) => task.assignedToId.eq(assignedToId));
+		collection = applyAssigneeFilter(collection, assignedToId);
 	}
 	if (clientVisible !== undefined) {
 		collection = collection.where((task) =>
@@ -331,9 +414,17 @@ export async function listTasks(
 		{ visibleOnly },
 	);
 
+	// One query for the whole page's assignees, not one per row. Issued in parallel
+	// with nothing else because it is the only remaining I/O here.
+	const assignees = await loadAssigneeSummaries(tasks);
+
 	return {
 		tasks: tasks.map((task) =>
-			toTaskResponse(task, blockingStates.get(task.id) ?? EMPTY_BLOCKING_STATE),
+			toTaskResponse(
+				task,
+				blockingStates.get(task.id) ?? EMPTY_BLOCKING_STATE,
+				assignees,
+			),
 		),
 		pagination: {
 			page,
@@ -378,7 +469,7 @@ export async function getTask(
 		task.id,
 		user.role === "CLIENT",
 	);
-	return toTaskResponse(task, blocking);
+	return toTaskResponse(task, blocking, await loadAssigneeSummaries([task]));
 }
 
 export async function createTask(
@@ -428,7 +519,11 @@ export async function createTask(
 		clientVisible: input.clientVisible ?? false,
 	});
 
-	return toTaskResponse(task, EMPTY_BLOCKING_STATE);
+	return toTaskResponse(
+		task,
+		EMPTY_BLOCKING_STATE,
+		await loadAssigneeSummaries([task]),
+	);
 }
 
 /**
@@ -570,7 +665,14 @@ async function buildVersionConflictError(
 		taskId,
 		expectedVersion,
 		latest.version,
-		toTaskResponse(latest, latestBlocking),
+		// The snapshot the caller refetches to includes the current assignee, so a
+		// conflict over an assignment tells them who it actually is now rather than
+		// making them issue another request to find out.
+		toTaskResponse(
+			latest,
+			latestBlocking,
+			await loadAssigneeSummaries([latest]),
+		),
 	);
 }
 
@@ -644,18 +746,21 @@ export async function updateTask(
 	const nextDepartment: TaskDepartment =
 		input.department ?? toTaskDepartment(task.department);
 
-	if (input.assignedToId !== undefined) {
+	// An explicit `null` clears the assignment, so it is not an assignee to validate.
+	// A uuid is, and the membership and eligibility rules are the same whether the
+	// task is being assigned for the first time or handed to somebody else.
+	if (typeof input.assignedToId === "string") {
 		await assertValidAssignee(project.id, input.assignedToId, nextDepartment);
 	}
 
 	// Re-pointing a task at a different team must not leave the current assignee
-	// outside the department that now owns the task.
+	// outside the department that now owns the task. Skipped when the request is
+	// itself setting the assignee, because the check above has already covered the
+	// person the task will end up with.
 	const currentAssigneeId =
-		input.assignedToId !== undefined
-			? input.assignedToId
-			: (task.assignedToId ?? undefined);
+		input.assignedToId !== undefined ? input.assignedToId : task.assignedToId;
 	if (
-		currentAssigneeId !== undefined &&
+		typeof currentAssigneeId === "string" &&
 		input.department !== undefined &&
 		input.assignedToId === undefined
 	) {
@@ -736,7 +841,13 @@ export async function updateTask(
 		updated.id,
 		user.role === "CLIENT",
 	);
-	return toTaskResponse(updated, blocking);
+	// Re-resolved after the write, so a reassignment returns the person the task now
+	// belongs to rather than the one it used to.
+	return toTaskResponse(
+		updated,
+		blocking,
+		await loadAssigneeSummaries([updated]),
+	);
 }
 
 export async function softDeleteTask(
@@ -812,6 +923,40 @@ function asArray<T>(value: T | T[] | undefined): T[] | undefined {
 }
 
 /**
+ * The tasks assigned to the caller, across every project they can reach.
+ *
+ * A thin wrapper over `listAllTasks` rather than a second query, so there is one
+ * filtering, paging, ordering, access-scoping and blocking implementation. The only
+ * thing this adds is the assignee predicate — and the fact that it is added here,
+ * from the authenticated identity, is the whole point.
+ *
+ * A client-supplied `assignedToId` is **discarded**, not honoured and not merged.
+ * "My tasks" that could be pointed at somebody else's user id would not be a
+ * personal view; it would be a way to read which projects a person works on, which
+ * is exactly the enumeration the access scoping in `listAllTasks` exists to
+ * prevent. Ignoring the parameter is also the friendlier answer than a 400: the
+ * browser sends the shared toolbar state, and being told "that filter is not
+ * allowed here" would be a worse experience than having it quietly mean "you".
+ */
+export async function listMyTasks(
+	user: UserContext,
+	query: TaskOfficialListQueryInput = DEFAULT_TASK_LIST_QUERY,
+): Promise<TaskListResponse> {
+	// The identity comes from the verified JWT, never from the request. `user.id`
+	// was resolved by the auth middleware from the access token, so it is the only
+	// input to this that a client cannot influence.
+	const { assignedToId: _ignored, ...filters } = query.filters;
+
+	return listAllTasks(user, {
+		...query,
+		filters: {
+			...filters,
+			assignedToId: user.id,
+		} as typeof query.filters,
+	});
+}
+
+/**
  * Cross-project task list for the flat `/tasks` endpoint.
  *
  * Every predicate is pushed into the database query, so an internal user can
@@ -855,9 +1000,7 @@ export async function listAllTasks(
 		filters.assignedToId as string | string[] | undefined,
 	);
 	if (assignedToIds !== undefined) {
-		collection = collection.where((task) =>
-			task.assignedToId.in(assignedToIds),
-		);
+		collection = applyAssigneeFilter(collection, assignedToIds);
 	}
 
 	const statuses = asArray(filters.status as string | string[] | undefined);
@@ -987,29 +1130,20 @@ export async function listAllTasks(
 		}
 	}
 
+	// One query for the whole page's assignees, across every project on it. The
+	// ids are deduplicated first, so a page of twenty tasks with three assignees is
+	// a single statement returning three rows.
+	const assignees = await loadAssigneeSummaries(tasks);
+
 	return {
 		tasks: tasks.map((task) =>
-			toTaskResponse(task, blockingStates.get(task.id) ?? EMPTY_BLOCKING_STATE),
+			toTaskResponse(
+				task,
+				blockingStates.get(task.id) ?? EMPTY_BLOCKING_STATE,
+				assignees,
+			),
 		),
 		pagination: toPagination(page, rows, countResult.total),
-	};
-}
-
-async function loadAssigneeRow(
-	assignedToId: string | null,
-): Promise<TaskAssigneeRow | null> {
-	if (assignedToId === null) {
-		return null;
-	}
-	const user = await db.orm.public.Users.first({ id: assignedToId });
-	if (!user) {
-		return null;
-	}
-	return {
-		id: user.id,
-		name: user.name,
-		email: user.email,
-		department: user.department,
 	};
 }
 
@@ -1042,9 +1176,9 @@ export async function getTaskById(
 		throw new TaskAccessDeniedError();
 	}
 
-	const [blocking, assignee] = await Promise.all([
+	const [blocking, assignees] = await Promise.all([
 		getBlockingState(project.id, task.id, false),
-		loadAssigneeRow(task.assignedToId ?? null),
+		loadAssigneeSummaries([task]),
 	]);
 
 	return toTaskDetailResponse(task, blocking, {
@@ -1053,7 +1187,7 @@ export async function getTaskById(
 			name: project.name,
 			status: project.status,
 		},
-		assignee,
+		assignees,
 	});
 }
 

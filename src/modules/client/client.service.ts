@@ -23,7 +23,10 @@ import type {
 	ClientTaskRecord,
 } from "./client.types";
 
-type ProjectRow = Omit<Models.public_Projects, "members" | "tasks">;
+type ProjectRow = Omit<
+	Models.public_Projects,
+	"members" | "tasks" | "invitations"
+>;
 
 function escapeLikePattern(value: string): string {
 	return value.replace(/[\\%_]/g, "\\$&");

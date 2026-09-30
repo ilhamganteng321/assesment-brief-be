@@ -21,6 +21,7 @@ import {
 	getTask,
 	getTaskById,
 	listAllTasks,
+	listMyTasks,
 	listTasks,
 	softDeleteTask,
 	softDeleteTaskById,
@@ -133,6 +134,23 @@ flatTaskRoutes.use(
 flatTaskRoutes.get("/", async (c) => {
 	const query = taskOfficialListQuerySchema.parse(c.req.query());
 	const result = await listAllTasks(c.get("user"), query);
+	return c.json(successResponse(result));
+});
+
+/**
+ * The caller's own work, across every project they can reach.
+ *
+ * Registered before `/:taskId` so the literal wins: Hono matches in registration
+ * order, and a route declared afterwards would see `/tasks/my` as a task id and
+ * reject it with a validation error about a uuid. The same reason the candidate
+ * search is registered ahead of the member routes it would otherwise shadow.
+ *
+ * There is no `userId` parameter. The assignee is the verified JWT's subject, so
+ * this cannot be pointed at somebody else's work — see `listMyTasks`.
+ */
+flatTaskRoutes.get("/my", async (c) => {
+	const query = taskOfficialListQuerySchema.parse(c.req.query());
+	const result = await listMyTasks(c.get("user"), query);
 	return c.json(successResponse(result));
 });
 

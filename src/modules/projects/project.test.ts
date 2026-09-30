@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import type {
 	ProjectAuthorizationContext,
+	ProjectStatus,
 	UserContext,
 } from "../authorization/authorization.types";
 import {
+	canChangeProjectStatus,
 	canCreateProject,
 	canDeleteProject,
 	canManageProjectMembers,
+	canSearchProjectMemberCandidates,
 	canUpdateProject,
 	canUseInternalProjectApi,
 	canViewProject,
@@ -14,9 +17,20 @@ import {
 import {
 	addProjectMemberSchema,
 	createProjectSchema,
+	MAX_MEMBER_CANDIDATE_ROWS,
+	MIN_MEMBER_CANDIDATE_SEARCH,
 	projectListQuerySchema,
-	updateProjectSchema,
+	projectMemberCandidatesQuerySchema,
+	updateProjectRequestSchema,
+	updateProjectStatusSchema,
 } from "./project.schema";
+import {
+	canTransitionProjectStatus,
+	getNextProjectStatuses,
+	isArchivedProject,
+	PROJECT_STATUS_TRANSITIONS,
+	validateProjectStatusTransition,
+} from "./project-lifecycle";
 
 const pm: UserContext = { id: "pm-1", role: "PM", department: "PRODUCT" };
 const internal: UserContext = {
@@ -93,22 +107,51 @@ describe("project schema", () => {
 	});
 
 	test("update accepts a single field", () => {
-		const parsed = updateProjectSchema.parse({ status: "COMPLETED" });
+		const parsed = updateProjectRequestSchema.parse({ status: "COMPLETED" });
 		expect(parsed).toEqual({ status: "COMPLETED" });
 	});
 
 	test("update rejects invalid status values", () => {
-		expect(() => updateProjectSchema.parse({ status: "DELETED" })).toThrow();
+		expect(() =>
+			updateProjectRequestSchema.parse({ status: "DELETED" }),
+		).toThrow();
 	});
 
 	test("update rejects id and timestamp fields", () => {
-		expect(() => updateProjectSchema.parse({ id: "proj" })).toThrow();
-		expect(() => updateProjectSchema.parse({ updatedAt: null })).toThrow();
-		expect(() => updateProjectSchema.parse({ deletedAt: null })).toThrow();
+		expect(() => updateProjectRequestSchema.parse({ id: "proj" })).toThrow();
+		expect(() =>
+			updateProjectRequestSchema.parse({ updatedAt: null }),
+		).toThrow();
+		expect(() =>
+			updateProjectRequestSchema.parse({ deletedAt: null }),
+		).toThrow();
+	});
+
+	// Mass assignment: the strict object is the boundary. A field the product
+	// does not expose is rejected outright rather than dropped, so a client that
+	// sends one is told rather than left believing it took effect.
+	test("update rejects a relationship or membership field", () => {
+		expect(() =>
+			updateProjectRequestSchema.parse({ name: "X", members: [] }),
+		).toThrow();
+		expect(() =>
+			updateProjectRequestSchema.parse({ name: "X", tasks: [] }),
+		).toThrow();
 	});
 
 	test("update rejects an empty payload", () => {
-		expect(() => updateProjectSchema.parse({})).toThrow();
+		expect(() => updateProjectRequestSchema.parse({})).toThrow();
+	});
+
+	test("the status route accepts a status and nothing else", () => {
+		expect(updateProjectStatusSchema.parse({ status: "ARCHIVED" })).toEqual({
+			status: "ARCHIVED",
+		});
+		expect(() =>
+			updateProjectStatusSchema.parse({ status: "ARCHIVED", name: "Renamed" }),
+		).toThrow();
+		expect(() => updateProjectStatusSchema.parse({})).toThrow();
+		expect(() => updateProjectStatusSchema.parse({ status: "OPEN" })).toThrow();
 	});
 
 	test("add member requires a valid uuid", () => {
@@ -343,5 +386,202 @@ describe("project policy", () => {
 		expect(canUseInternalProjectApi(pm)).toBe(true);
 		expect(canUseInternalProjectApi(internal)).toBe(true);
 		expect(canUseInternalProjectApi(client)).toBe(false);
+	});
+});
+
+describe("project lifecycle", () => {
+	const allStatuses: readonly ProjectStatus[] = [
+		"PLANNING",
+		"ACTIVE",
+		"COMPLETED",
+		"ARCHIVED",
+	];
+
+	test("the lifecycle only ever moves forward one step at a time", () => {
+		expect(PROJECT_STATUS_TRANSITIONS.PLANNING).toEqual(["ACTIVE"]);
+		expect(PROJECT_STATUS_TRANSITIONS.ACTIVE).toEqual(["COMPLETED"]);
+		expect(PROJECT_STATUS_TRANSITIONS.COMPLETED).toEqual(["ARCHIVED"]);
+	});
+
+	test("ARCHIVED is terminal: there is no reopen", () => {
+		expect(PROJECT_STATUS_TRANSITIONS.ARCHIVED).toEqual([]);
+		expect(getNextProjectStatuses("ARCHIVED")).toEqual([]);
+	});
+
+	test("ACTIVE may not skip straight to ARCHIVED", () => {
+		expect(canTransitionProjectStatus("ACTIVE", "ARCHIVED")).toBe(false);
+	});
+
+	test("no status may move backwards", () => {
+		expect(canTransitionProjectStatus("COMPLETED", "ACTIVE")).toBe(false);
+		expect(canTransitionProjectStatus("ARCHIVED", "ACTIVE")).toBe(false);
+		expect(canTransitionProjectStatus("ARCHIVED", "COMPLETED")).toBe(false);
+		expect(canTransitionProjectStatus("ACTIVE", "PLANNING")).toBe(false);
+	});
+
+	// The table is the whole rule, so it is worth proving there is no pair it
+	// quietly permits beyond the three forward steps.
+	test("exactly the forward steps are permitted", () => {
+		const permitted: string[] = [];
+		for (const from of allStatuses) {
+			for (const to of allStatuses) {
+				if (canTransitionProjectStatus(from, to)) {
+					permitted.push(`${from}->${to}`);
+				}
+			}
+		}
+		expect(permitted).toEqual([
+			"PLANNING->ACTIVE",
+			"ACTIVE->COMPLETED",
+			"COMPLETED->ARCHIVED",
+		]);
+	});
+
+	test("a legal transition does not throw", () => {
+		expect(() =>
+			validateProjectStatusTransition("ACTIVE", "COMPLETED"),
+		).not.toThrow();
+		expect(() =>
+			validateProjectStatusTransition("COMPLETED", "ARCHIVED"),
+		).not.toThrow();
+	});
+
+	test("an illegal transition throws a typed 409 conflict", () => {
+		for (const [from, to] of [
+			["ACTIVE", "ARCHIVED"],
+			["COMPLETED", "ACTIVE"],
+			["ARCHIVED", "ACTIVE"],
+			["ARCHIVED", "COMPLETED"],
+		] as const) {
+			let thrown: unknown;
+			try {
+				validateProjectStatusTransition(from, to);
+			} catch (error) {
+				thrown = error;
+			}
+			expect(thrown).toBeInstanceOf(Error);
+			expect((thrown as { status: number }).status).toBe(409);
+			expect((thrown as { code: string }).code).toBe(
+				"INVALID_PROJECT_STATUS_TRANSITION",
+			);
+			expect((thrown as { message: string }).message).toBe(
+				`Project cannot transition from ${from} to ${to}.`,
+			);
+		}
+	});
+
+	// A retry of a write whose response was lost must not fail with a conflict
+	// the caller can do nothing about.
+	test("re-asserting the current status is a no-op, not a transition", () => {
+		for (const status of allStatuses) {
+			expect(() =>
+				validateProjectStatusTransition(status, status),
+			).not.toThrow();
+		}
+	});
+
+	test("only ARCHIVED is read-only", () => {
+		expect(isArchivedProject("ARCHIVED")).toBe(true);
+		expect(isArchivedProject("COMPLETED")).toBe(false);
+		expect(isArchivedProject("ACTIVE")).toBe(false);
+		expect(isArchivedProject("PLANNING")).toBe(false);
+	});
+});
+
+describe("project status policy", () => {
+	// The lifecycle grants nobody a permission they did not already hold: it
+	// constrains which status a caller who may update can set, nothing more.
+	test("changing a project's status follows the project update permission", () => {
+		expect(canChangeProjectStatus(pm)).toBe(true);
+		expect(canChangeProjectStatus(internal)).toBe(false);
+		expect(canChangeProjectStatus(client)).toBe(false);
+	});
+
+	test("it matches the general update permission for every role", () => {
+		for (const user of [pm, internal, client]) {
+			expect(canChangeProjectStatus(user)).toBe(canUpdateProject(user));
+		}
+	});
+});
+
+describe("project membership policy", () => {
+	test("only a project manager may change membership", () => {
+		expect(canManageProjectMembers(pm)).toBe(true);
+		expect(canManageProjectMembers(internal)).toBe(false);
+		expect(canManageProjectMembers(client)).toBe(false);
+	});
+
+	// The candidate search exists only to serve the add-member flow. Handing it to
+	// a role that cannot add would expose the whole organisation's names, emails
+	// and departments to anyone who can open a project, which is a larger
+	// disclosure than the feature needs.
+	test("candidate search is gated by the same rule as adding", () => {
+		expect(canSearchProjectMemberCandidates(pm)).toBe(true);
+		expect(canSearchProjectMemberCandidates(internal)).toBe(false);
+		expect(canSearchProjectMemberCandidates(client)).toBe(false);
+	});
+
+	test("candidate search never widens the permission to add", () => {
+		for (const user of [pm, internal, client]) {
+			if (canSearchProjectMemberCandidates(user)) {
+				expect(canManageProjectMembers(user)).toBe(true);
+			}
+		}
+	});
+});
+
+describe("project member candidate query contract", () => {
+	test("defaults to an empty search on the first page", () => {
+		const parsed = projectMemberCandidatesQuerySchema.parse({});
+
+		expect(parsed).toEqual({ search: "", page: 1, rows: 10 });
+	});
+
+	test("trims the search and coerces paging from query strings", () => {
+		const parsed = projectMemberCandidatesQuerySchema.parse({
+			search: "  john  ",
+			page: "2",
+			rows: "5",
+		});
+
+		expect(parsed).toEqual({ search: "john", page: 2, rows: 5 });
+	});
+
+	test("rejects an over-long search", () => {
+		expect(() =>
+			projectMemberCandidatesQuerySchema.parse({ search: "a".repeat(151) }),
+		).toThrow();
+	});
+
+	test("rejects out of range paging", () => {
+		expect(() =>
+			projectMemberCandidatesQuerySchema.parse({ page: 0 }),
+		).toThrow();
+		expect(() =>
+			projectMemberCandidatesQuerySchema.parse({ page: 1.5 }),
+		).toThrow();
+		expect(() =>
+			projectMemberCandidatesQuerySchema.parse({ rows: 0 }),
+		).toThrow();
+		expect(() =>
+			projectMemberCandidatesQuerySchema.parse({
+				rows: MAX_MEMBER_CANDIDATE_ROWS + 1,
+			}),
+		).toThrow();
+	});
+
+	test("rejects an unknown parameter rather than ignoring it", () => {
+		expect(() =>
+			projectMemberCandidatesQuerySchema.parse({ limit: 10 }),
+		).toThrow();
+		expect(() =>
+			projectMemberCandidatesQuerySchema.parse({ filters: "{}" }),
+		).toThrow();
+	});
+
+	// The minimum is what keeps a one-character prefix from scanning the whole
+	// user table; the service uses it to short-circuit rather than to error.
+	test("the minimum search length is two characters", () => {
+		expect(MIN_MEMBER_CANDIDATE_SEARCH).toBe(2);
 	});
 });

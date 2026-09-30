@@ -12,6 +12,10 @@
       "model": "AuditLogs",
       "namespace": "public"
     },
+    "project_invitations": {
+      "model": "ProjectInvitations",
+      "namespace": "public"
+    },
     "project_members": {
       "model": "ProjectMembers",
       "namespace": "public"
@@ -297,6 +301,159 @@
               "table": "audit_logs"
             }
           },
+          "ProjectInvitations": {
+            "fields": {
+              "acceptedAt": {
+                "nullable": true,
+                "type": {
+                  "codecId": "pg/timestamp-temporal@1",
+                  "kind": "scalar"
+                }
+              },
+              "createdAt": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/timestamp-temporal@1",
+                  "kind": "scalar"
+                }
+              },
+              "email": {
+                "nullable": false,
+                "type": {
+                  "codecId": "sql/varchar@1",
+                  "kind": "scalar",
+                  "typeParams": {
+                    "length": 255
+                  }
+                }
+              },
+              "expiresAt": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/timestamp-temporal@1",
+                  "kind": "scalar"
+                }
+              },
+              "id": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/uuid@1",
+                  "kind": "scalar"
+                }
+              },
+              "invitedById": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/uuid@1",
+                  "kind": "scalar"
+                }
+              },
+              "projectId": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/uuid@1",
+                  "kind": "scalar"
+                }
+              },
+              "status": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/enum@1",
+                  "kind": "scalar",
+                  "typeParams": {
+                    "typeName": "invitation_status"
+                  }
+                }
+              },
+              "tokenHash": {
+                "nullable": false,
+                "type": {
+                  "codecId": "sql/varchar@1",
+                  "kind": "scalar",
+                  "typeParams": {
+                    "length": 64
+                  }
+                }
+              },
+              "updatedAt": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/timestamp-temporal@1",
+                  "kind": "scalar"
+                }
+              }
+            },
+            "relations": {
+              "invitedBy": {
+                "cardinality": "N:1",
+                "nullable": false,
+                "on": {
+                  "localFields": [
+                    "invitedById"
+                  ],
+                  "targetFields": [
+                    "id"
+                  ]
+                },
+                "to": {
+                  "model": "Users",
+                  "namespace": "public"
+                }
+              },
+              "project": {
+                "cardinality": "N:1",
+                "nullable": false,
+                "on": {
+                  "localFields": [
+                    "projectId"
+                  ],
+                  "targetFields": [
+                    "id"
+                  ]
+                },
+                "to": {
+                  "model": "Projects",
+                  "namespace": "public"
+                }
+              }
+            },
+            "storage": {
+              "fields": {
+                "acceptedAt": {
+                  "column": "accepted_at"
+                },
+                "createdAt": {
+                  "column": "created_at"
+                },
+                "email": {
+                  "column": "email"
+                },
+                "expiresAt": {
+                  "column": "expires_at"
+                },
+                "id": {
+                  "column": "id"
+                },
+                "invitedById": {
+                  "column": "invited_by_id"
+                },
+                "projectId": {
+                  "column": "project_id"
+                },
+                "status": {
+                  "column": "status"
+                },
+                "tokenHash": {
+                  "column": "token_hash"
+                },
+                "updatedAt": {
+                  "column": "updated_at"
+                }
+              },
+              "namespaceId": "public",
+              "table": "project_invitations"
+            }
+          },
           "ProjectMembers": {
             "fields": {
               "createdAt": {
@@ -450,6 +607,21 @@
               }
             },
             "relations": {
+              "invitations": {
+                "cardinality": "1:N",
+                "on": {
+                  "localFields": [
+                    "id"
+                  ],
+                  "targetFields": [
+                    "projectId"
+                  ]
+                },
+                "to": {
+                  "model": "ProjectInvitations",
+                  "namespace": "public"
+                }
+              },
               "members": {
                 "cardinality": "1:N",
                 "on": {
@@ -1014,6 +1186,21 @@
                   "model": "ProjectMembers",
                   "namespace": "public"
                 }
+              },
+              "sentProjectInvitations": {
+                "cardinality": "1:N",
+                "on": {
+                  "localFields": [
+                    "id"
+                  ],
+                  "targetFields": [
+                    "invitedById"
+                  ]
+                },
+                "to": {
+                  "model": "ProjectInvitations",
+                  "namespace": "public"
+                }
               }
             },
             "storage": {
@@ -1066,6 +1253,16 @@
                 "CLIENT"
               ],
               "typeName": "department"
+            },
+            "invitation_status": {
+              "kind": "postgres-enum",
+              "members": [
+                "PENDING",
+                "ACCEPTED",
+                "EXPIRED",
+                "CANCELED"
+              ],
+              "typeName": "invitation_status"
             },
             "project_status": {
               "kind": "postgres-enum",
@@ -1364,6 +1561,182 @@
                   "id"
                 ],
                 "name": "audit_logs_pkey"
+              },
+              "uniques": []
+            },
+            "project_invitations": {
+              "columns": {
+                "accepted_at": {
+                  "codecId": "pg/timestamp-temporal@1",
+                  "nativeType": "timestamp",
+                  "nullable": true
+                },
+                "created_at": {
+                  "codecId": "pg/timestamp-temporal@1",
+                  "default": {
+                    "expression": "now()",
+                    "kind": "function"
+                  },
+                  "nativeType": "timestamp",
+                  "nullable": false
+                },
+                "email": {
+                  "codecId": "sql/varchar@1",
+                  "nativeType": "character varying",
+                  "nullable": false,
+                  "typeParams": {
+                    "length": 255
+                  }
+                },
+                "expires_at": {
+                  "codecId": "pg/timestamp-temporal@1",
+                  "nativeType": "timestamp",
+                  "nullable": false
+                },
+                "id": {
+                  "codecId": "pg/uuid@1",
+                  "default": {
+                    "expression": "gen_random_uuid()",
+                    "kind": "function"
+                  },
+                  "nativeType": "uuid",
+                  "nullable": false
+                },
+                "invited_by_id": {
+                  "codecId": "pg/uuid@1",
+                  "nativeType": "uuid",
+                  "nullable": false
+                },
+                "project_id": {
+                  "codecId": "pg/uuid@1",
+                  "nativeType": "uuid",
+                  "nullable": false
+                },
+                "status": {
+                  "codecId": "pg/enum@1",
+                  "default": {
+                    "kind": "literal",
+                    "value": "PENDING"
+                  },
+                  "nativeType": "invitation_status",
+                  "nullable": false,
+                  "typeParams": {
+                    "typeName": "invitation_status"
+                  },
+                  "valueSet": {
+                    "entityKind": "valueSet",
+                    "entityName": "InvitationStatus",
+                    "namespaceId": "public",
+                    "plane": "storage"
+                  }
+                },
+                "token_hash": {
+                  "codecId": "sql/varchar@1",
+                  "nativeType": "character varying",
+                  "nullable": false,
+                  "typeParams": {
+                    "length": 64
+                  }
+                },
+                "updated_at": {
+                  "codecId": "pg/timestamp-temporal@1",
+                  "default": {
+                    "expression": "now()",
+                    "kind": "function"
+                  },
+                  "nativeType": "timestamp",
+                  "nullable": false
+                }
+              },
+              "foreignKeys": [
+                {
+                  "name": "project_invitations_project_id_fkey",
+                  "onDelete": "cascade",
+                  "source": {
+                    "columns": [
+                      "project_id"
+                    ],
+                    "namespaceId": "public",
+                    "tableName": "project_invitations"
+                  },
+                  "target": {
+                    "columns": [
+                      "id"
+                    ],
+                    "namespaceId": "public",
+                    "tableName": "projects"
+                  }
+                },
+                {
+                  "name": "project_invitations_invited_by_id_fkey",
+                  "onDelete": "restrict",
+                  "source": {
+                    "columns": [
+                      "invited_by_id"
+                    ],
+                    "namespaceId": "public",
+                    "tableName": "project_invitations"
+                  },
+                  "target": {
+                    "columns": [
+                      "id"
+                    ],
+                    "namespaceId": "public",
+                    "tableName": "users"
+                  }
+                }
+              ],
+              "indexes": [
+                {
+                  "columns": [
+                    "expires_at"
+                  ],
+                  "name": "project_invitations_expires_at_idx",
+                  "unique": false
+                },
+                {
+                  "columns": [
+                    "invited_by_id"
+                  ],
+                  "name": "project_invitations_invited_by_id_idx",
+                  "unique": false
+                },
+                {
+                  "columns": [
+                    "project_id",
+                    "email"
+                  ],
+                  "name": "project_invitations_project_id_email_idx",
+                  "unique": false
+                },
+                {
+                  "columns": [
+                    "project_id"
+                  ],
+                  "name": "project_invitations_project_id_idx",
+                  "unique": false
+                },
+                {
+                  "columns": [
+                    "project_id",
+                    "status"
+                  ],
+                  "name": "project_invitations_project_id_status_idx",
+                  "unique": false
+                },
+                {
+                  "columns": [
+                    "token_hash"
+                  ],
+                  "name": "project_invitations_token_hash_idx",
+                  "unique": true
+                }
+              ],
+              "primaryKey": {
+                "columns": [
+                  "id"
+                ],
+                "name": "project_invitations_pkey"
               },
               "uniques": []
             },
@@ -2045,6 +2418,15 @@
                 "CLIENT"
               ]
             },
+            "InvitationStatus": {
+              "kind": "valueSet",
+              "values": [
+                "PENDING",
+                "ACCEPTED",
+                "EXPIRED",
+                "CANCELED"
+              ]
+            },
             "ProjectStatus": {
               "kind": "valueSet",
               "values": [
@@ -2086,7 +2468,7 @@
         "kind": "postgres-schema"
       }
     },
-    "storageHash": "75a23ec625ae12a6ed87f599bf50b51cbc59e1b6622b3ae87ffe440cef05ef48"
+    "storageHash": "12344505d11c7c5fb15a0040feb9e63338460f7106b7a66030686a4c87a07ef7"
   },
   "capabilities": {
     "postgres": {

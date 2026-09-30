@@ -39,6 +39,32 @@ export const envSchema = z
 			.optional(),
 		MAX_UPLOAD_SIZE_MB: positiveInt("MAX_UPLOAD_SIZE_MB").default(10),
 		STORAGE_PROVIDER: z.enum(["local"]).default("local"),
+		MAIL_FROM: z
+			.string()
+			.trim()
+			.min(1, "MAIL_FROM must not be empty")
+			.email("MAIL_FROM must be a valid email address")
+			.default("no-reply@example.com"),
+		/**
+		 * `log` prints the whole message — acceptance link included — to stdout, so
+		 * that the invitation flow can be followed by hand in development. It is a
+		 * token disclosure, which is exactly why `NODE_ENV === "production"` below
+		 * refuses to boot with it rather than defaulting away from it. A production
+		 * deployment registers a real transport through `setEmailService`; until one
+		 * exists the safe failure is a server that will not start.
+		 */
+		EMAIL_PROVIDER: z.enum(["log", "memory", "smtp"]).default("log"),
+		/**
+		 * How long an emailed invitation link stays usable.
+		 *
+		 * Bounded on both sides. The lower bound is because a link that expires
+		 * almost immediately is an invitation nobody can use; the upper bound is
+		 * because an invitation is a standing grant to join a project, and the longer
+		 * it is valid the longer a leaked inbox stays a way in.
+		 */
+		INVITATION_TTL_DAYS: positiveInt("INVITATION_TTL_DAYS")
+			.max(90, "INVITATION_TTL_DAYS must be at most 90")
+			.default(7),
 		STORAGE_LOCAL_DIR: z
 			.string()
 			.min(1, "STORAGE_LOCAL_DIR must not be empty")
@@ -116,6 +142,20 @@ export const envSchema = z
 					code: "custom",
 					path: ["JWT_SECRET"],
 					message: "JWT_SECRET must be at least 32 characters in production",
+				});
+			}
+			// Neither remaining provider is safe here, and the difference matters:
+			// `log` writes a live acceptance token to stdout, and `memory` delivers
+			// nothing at all, so a project manager would be told an invitation was
+			// sent that no recipient will ever receive. Both are refused at boot so
+			// the deployment registers a real transport instead of discovering the
+			// problem from a user who never got the mail.
+			if (data.EMAIL_PROVIDER !== "smtp") {
+				ctx.addIssue({
+					code: "custom",
+					path: ["EMAIL_PROVIDER"],
+					message:
+						"EMAIL_PROVIDER must be a real transport in production; register one with setEmailService and set EMAIL_PROVIDER accordingly",
 				});
 			}
 		}

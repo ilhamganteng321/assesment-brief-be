@@ -40,7 +40,10 @@ import type {
 import { localStorageProvider } from "./storage/local.storage";
 import type { StorageProvider } from "./storage/storage.interface";
 
-type ProjectRow = Omit<Models.public_Projects, "members" | "tasks">;
+type ProjectRow = Omit<
+	Models.public_Projects,
+	"members" | "tasks" | "invitations"
+>;
 
 type TaskRow = Omit<
 	Models.public_Tasks,

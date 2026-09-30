@@ -26,9 +26,20 @@ export type TaskProjectRow = Pick<
 	"id" | "name" | "status"
 >;
 
+/**
+ * The user fields a task's assignee is allowed to carry.
+ *
+ * A `Pick` off the contract rather than a hand-written interface, so adding a
+ * column to `users` cannot silently widen what an assignee projection returns. It
+ * is also *not* the whole row: `passwordHash` is not in the list, so it is never
+ * selected from the database and cannot be logged or leaked by a later edit to a
+ * response builder. `role` is here because it is the same allow-list the member
+ * summaries already use, and the interface genuinely needs it — the assignee
+ * control shows what the person will be able to do once they pick the task up.
+ */
 export type TaskAssigneeRow = Pick<
 	Models.public_Users,
-	"id" | "name" | "email" | "department"
+	"id" | "name" | "email" | "role" | "department"
 >;
 
 export type TaskResponse = Pick<
@@ -48,11 +59,18 @@ export type TaskResponse = Pick<
 > & {
 	isBlocked: boolean;
 	blockedBy: DependencyTaskSummary[];
+	/**
+	 * The assignee, resolved, or null.
+	 *
+	 * On the list as well as the detail, so a table row can name the person without
+	 * the browser issuing a request per task. Hydrated in one batched query per page
+	 * rather than per task — see `loadAssigneeSummaries`.
+	 */
+	assignedTo: TaskAssigneeRow | null;
 };
 
 export type TaskDetailResponse = TaskResponse & {
 	project: TaskProjectRow;
-	assignedTo: TaskAssigneeRow | null;
 };
 
 export type Pagination = {

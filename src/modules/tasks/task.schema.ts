@@ -16,6 +16,20 @@ export const TASK_STATUSES = [
 	"DONE",
 ] as const;
 
+/**
+ * Statuses that still count as somebody's open work.
+ *
+ * The complement of `DONE`, written as an explicit allow-list rather than a
+ * "not DONE" negation for one reason: the query builder has no inequality operator
+ * on an enum column, and more importantly a status added later should default to
+ * *active*. Somebody who is still working on a task nobody has reclassified must
+ * not become removable from the project by accident, so the safe direction is the
+ * one that has to be opted out of deliberately.
+ */
+export const ACTIVE_TASK_STATUSES = TASK_STATUSES.filter(
+	(status) => status !== "DONE",
+) as readonly (typeof TASK_STATUSES)[number][];
+
 export const TASK_PRIORITIES = ["LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 
 /**
@@ -43,6 +57,22 @@ const descriptionSchema = z
 
 const assignedToIdSchema = z.string().uuid("A valid user id is required");
 
+/**
+ * An update-only assignee: a uuid, or `null` to clear the assignment.
+ *
+ * The two states a PATCH has to tell apart are "leave this alone" and "take it
+ * off". An omitted key is the first; there is no way to express the second with
+ * `undefined` alone, because omitting a key and sending JSON `null` are different
+ * requests and only one of them should move the column. So `null` is the explicit
+ * "unassign" and the service writes it straight through.
+ *
+ * Deliberately not offered on create. A task that is created with nobody on it is
+ * a task with `assignedToId` omitted, which is the same thing and needs no second
+ * spelling; here the difference is that clearing an existing assignment is a real
+ * action a person takes, and it deserves to be readable in the body.
+ */
+const nullableAssignedToIdSchema = assignedToIdSchema.nullable();
+
 const statusSchema = z.enum(TASK_STATUSES);
 
 const prioritySchema = z.enum(TASK_PRIORITIES);
@@ -67,7 +97,7 @@ export const createTaskSchema = z.strictObject({
 export const updateTaskInputSchema = z.strictObject({
 	title: titleSchema.optional(),
 	description: descriptionSchema,
-	assignedToId: assignedToIdSchema.optional(),
+	assignedToId: nullableAssignedToIdSchema.optional(),
 	status: statusSchema.optional(),
 	priority: prioritySchema.optional(),
 	department: departmentSchema.optional(),
@@ -99,6 +129,43 @@ const clientVisibleQuerySchema = z
 	.transform((value) => value === "true")
 	.optional();
 
+/**
+ * The sentinel that means "tasks with nobody on them".
+ *
+ * An unassigned filter has to be expressible, and `IS NULL` cannot travel through a
+ * UUID schema — a query string carries strings, and the empty string is not a
+ * value anybody can distinguish from an omitted parameter. Rather than invent a
+ * second filter key (which would be a second syntax to document, validate and keep
+ * consistent) the same `assignedToId` key accepts one reserved word alongside the
+ * uuids, and the service translates it into a null predicate.
+ *
+ * Backward compatible by construction: every value that parsed before still parses,
+ * and a caller that sends only uuids gets exactly the behaviour it had. The
+ * interface already models this as the literal `"unassigned"`, so the two halves
+ * agree on the spelling rather than each inventing one.
+ *
+ * Declared before both list schemas because each of them accepts it, and the two
+ * definitions are the same value on purpose.
+ */
+export const UNASSIGNED_FILTER_VALUE = "unassigned";
+
+const assigneeFilterValueSchema = z.union([
+	uuidValueSchema(),
+	z.literal(UNASSIGNED_FILTER_VALUE),
+]);
+
+/**
+ * The array form, for the flat cross-project list.
+ *
+ * Same two shapes as the scalar form plus a list of them, matching
+ * `enumArrayValueSchema`: one person, several people, or "nobody", and several
+ * people together with "nobody" in a single request.
+ */
+const assigneeFilterArrayValueSchema = z.union([
+	assigneeFilterValueSchema,
+	z.array(assigneeFilterValueSchema).min(1, "must not be empty").max(100),
+]);
+
 export const taskListQuerySchema = z.strictObject({
 	page: z.coerce
 		.number()
@@ -117,7 +184,15 @@ export const taskListQuerySchema = z.strictObject({
 		.max(200, "search must be at most 200 characters")
 		.optional(),
 	status: statusSchema.optional(),
-	assignedToId: assignedToIdSchema.optional(),
+	/**
+	 * A uuid, or the `unassigned` sentinel.
+	 *
+	 * The nested project list takes a single value rather than a list, so it cannot
+	 * ask for two people at once — that is the flat list's contract, and keeping the
+	 * two different is deliberate rather than an oversight. The sentinel is shared so
+	 * "nobody is on this" is spelled identically wherever it is asked for.
+	 */
+	assignedToId: assigneeFilterValueSchema.optional(),
 	clientVisible: clientVisibleQuerySchema,
 	/** Derived from the dependency graph; see the flat list for the rationale. */
 	isBlocked: clientVisibleQuerySchema,
@@ -184,7 +259,7 @@ const taskListQueryFactory = createListQuerySchema({
 	filterValueSchemas: {
 		id: uuidValueSchema(),
 		projectId: uuidValueSchema(),
-		assignedToId: uuidValueSchema(),
+		assignedToId: assigneeFilterArrayValueSchema,
 		status: enumArrayValueSchema(TASK_STATUSES),
 		priority: enumArrayValueSchema(TASK_PRIORITIES),
 		department: enumArrayValueSchema(TASK_DEPARTMENTS),

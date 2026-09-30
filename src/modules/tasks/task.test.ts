@@ -199,6 +199,10 @@ describe("task schema", () => {
 			updatedAt: toTimestamp("2026-01-01T00:00:00"),
 			isBlocked: false,
 			blockedBy: [],
+			// The conflict snapshot resolves the assignee too, so a person who lost a
+			// race over an assignment is handed the person it is now assigned to
+			// rather than having to ask for it.
+			assignedTo: null,
 		};
 		const conflict = new TaskVersionConflictError("task-7", 5, 6, latestTask);
 

@@ -16,6 +16,17 @@ export const Permission = {
 	PROJECT_CREATE: "PROJECT_CREATE",
 	PROJECT_UPDATE: "PROJECT_UPDATE",
 	PROJECT_DELETE: "PROJECT_DELETE",
+	/**
+	 * Read the organisation-wide user directory.
+	 *
+	 * A real permission rather than a `role === "PM"` check scattered through the
+	 * users module, so the gate is one matrix entry that can be widened to another
+	 * role later without touching any service or route. Held by PM alone today:
+	 * the directory exists so a project manager can find somebody to put on a
+	 * project, and no other role has that job. An internal engineer can already
+	 * see the members of their own projects, which is the subset they need.
+	 */
+	USER_READ: "USER_READ",
 	TASK_READ: "TASK_READ",
 	TASK_CREATE: "TASK_CREATE",
 	TASK_UPDATE: "TASK_UPDATE",
@@ -34,6 +45,7 @@ const PM_PERMISSIONS: readonly Permission[] = [
 	Permission.PROJECT_CREATE,
 	Permission.PROJECT_UPDATE,
 	Permission.PROJECT_DELETE,
+	Permission.USER_READ,
 	Permission.TASK_READ,
 	Permission.TASK_CREATE,
 	Permission.TASK_UPDATE,
@@ -45,6 +57,16 @@ const PM_PERMISSIONS: readonly Permission[] = [
 	Permission.AUDIT_READ,
 ];
 
+/**
+ * Deliberately without `USER_READ`.
+ *
+ * An internal user is a team member, not an administrator of the org chart: they
+ * can see the members of the projects they belong to, which is the subset of the
+ * directory their work actually touches. Granting every engineer a searchable
+ * list of every account, email and department would be a wider disclosure than
+ * any part of the product asks for. Widening this is a one-line matrix change
+ * when a real need appears.
+ */
 const INTERNAL_PERMISSIONS: readonly Permission[] = [
 	Permission.TASK_READ,
 	Permission.TASK_UPDATE,
@@ -52,6 +74,13 @@ const INTERNAL_PERMISSIONS: readonly Permission[] = [
 	Permission.AUDIT_READ,
 ];
 
+/**
+ * No `USER_READ`, and the reason is the point: a client guest must not be able
+ * to enumerate the internal team. `PROJECT_READ` is scoped to projects they are a
+ * member of, and they are never a member of an internal project. A client learns
+ * about people only through the project they are on, and even there the existing
+ * client policy exposes no member identities at all.
+ */
 const CLIENT_PERMISSIONS: readonly Permission[] = [
 	Permission.PROJECT_READ,
 	Permission.TASK_READ,

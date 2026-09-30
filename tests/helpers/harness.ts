@@ -3,6 +3,8 @@ import { setDefaultTimeout } from "bun:test";
 import { app } from "../../src/app";
 import { localStorageProvider } from "../../src/modules/attachments/storage/local.storage";
 import { hashPassword } from "../../src/modules/auth/password";
+import { setEmailService } from "../../src/modules/email/email.service";
+import { MemoryEmailService } from "../../src/modules/email/email.providers";
 import { db } from "../../src/prisma/db";
 import { toVarchar, type StoredTimestamp } from "../../src/prisma/scalars";
 
@@ -37,6 +39,18 @@ export const TEST_PASSWORD = "ItPass#2026";
 
 /** One run id per process keeps concurrent suites from colliding on emails. */
 const RUN_ID = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
+/**
+ * This run's id, so a suite can search for exactly its own accounts.
+ *
+ * Exported because "find the accounts this suite provisioned" used to be spelled
+ * as the bare `it-` prefix, which quietly depends on nothing else in the database
+ * containing those two characters. Staged and seeded rows do, and once they did the
+ * searches returned more matches than one page could hold — pushing the very
+ * accounts under test off the end of the results. Matching on the run id makes the
+ * scope exact regardless of what else the database holds.
+ */
+export const TEST_RUN_ID = RUN_ID;
 
 /**
  * Which attempt at the shared world is currently being built.
@@ -182,6 +196,14 @@ export type Actor = {
 	readonly role: Role;
 	readonly userId: string;
 	readonly email: string;
+	/**
+	 * The account's display name.
+	 *
+	 * Carried through so a suite can assert on what the API resolves — a task's
+	 * `assignedTo` summary, a member's label — without a second lookup, and so a
+	 * fixture can read as the person it stands for rather than as an id.
+	 */
+	readonly name: string;
 	readonly token: string;
 };
 
@@ -219,7 +241,7 @@ export async function registerInternal(input: {
 		);
 	}
 	ownedUserIds.push(userId);
-	return { role: "INTERNAL", userId, email: input.email, token };
+	return { role: "INTERNAL", userId, email: input.email, name: input.name, token };
 }
 
 /**
@@ -241,7 +263,13 @@ export async function createPrivilegedActor(input: {
 	});
 	ownedUserIds.push(user.id);
 	const token = await loginOrThrow(input.email, TEST_PASSWORD);
-	return { role: input.role, userId: user.id, email: input.email, token };
+	return {
+		role: input.role,
+		userId: user.id,
+		email: input.email,
+		name: String(user.name),
+		token,
+	};
 }
 
 export async function login(email: string, password: string): Promise<string> {
@@ -539,6 +567,13 @@ export async function cleanupFixtures(): Promise<void> {
 
 	for (const projectId of ownedProjectIds) {
 		try {
+			// Invitations first. They cascade with the project, but the inviter
+			// relation is ON DELETE RESTRICT, so a suite that created an invitation
+			// for a project it did not register here would otherwise fail the user
+			// cleanup below on a constraint rather than on anything it did.
+			await db.orm.public.ProjectInvitations.where((i) =>
+				i.projectId.eq(projectId),
+			).delete();
 			await db.orm.public.ProjectMembers.where((m) =>
 				m.projectId.eq(projectId),
 			).delete();
@@ -550,6 +585,11 @@ export async function cleanupFixtures(): Promise<void> {
 
 	for (const userId of ownedUserIds) {
 		try {
+			// Same reason in the other direction: an invitation naming this account
+			// as the inviter would block the delete.
+			await db.orm.public.ProjectInvitations.where((i) =>
+				i.invitedById.eq(userId),
+			).delete();
 			await db.orm.public.Users.where((u) => u.id.eq(userId)).delete();
 		} catch {
 			// best-effort
@@ -559,6 +599,101 @@ export async function cleanupFixtures(): Promise<void> {
 	ownedUserIds.length = 0;
 	ownedProjectIds.length = 0;
 	ownedTaskIds.length = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Invitation fixtures
+// ---------------------------------------------------------------------------
+
+/**
+ * Installs a capturing email transport for the duration of a suite.
+ *
+ * The alternative — reading a token out of the database and hashing a value the
+ * test invented — would pass even if the create path emailed a token it never
+ * stored, or stored a token it never emailed. The delivered message is the only
+ * place the real correspondence between the two lives, so a suite that wants to
+ * accept an invitation has to go through it.
+ *
+ * Returns the recorded messages and a restore function, because leaving a
+ * process-wide transport swapped out would leak into the next suite.
+ */
+export function captureEmails(): {
+	readonly sent: MemoryEmailService;
+	readonly restore: () => void;
+} {
+	const sent = new MemoryEmailService();
+	const restore = setEmailService(sent);
+	return { sent, restore };
+}
+
+/**
+ * The raw token from the most recent message sent to `email`.
+ *
+ * Throws rather than returning null: a test that cannot find the link it just
+ * caused to be sent has a broken fixture, and saying so here is far clearer than
+ * letting `undefined` become a 404 from the accept route several lines later.
+ */
+export function tokenFromEmail(
+	sent: MemoryEmailService,
+	email: string,
+): string {
+	const message = sent.lastTo(email);
+	if (!message) {
+		throw new Error(
+			`fixture: no invitation email was delivered to ${email}`,
+		);
+	}
+	const match = /\/invitations\/accept\?token=([A-Za-z0-9_-]+)/.exec(
+		message.text,
+	);
+	if (!match?.[1]) {
+		throw new Error(
+			`fixture: the email sent to ${email} carried no acceptance link`,
+		);
+	}
+	return match[1];
+}
+
+/** The stored row, to prove what the database actually holds. */
+export async function readInvitationRow(
+	invitationId: string,
+): Promise<{
+	id: string;
+	projectId: string;
+	email: string;
+	status: string;
+	tokenHash: string;
+	expiresAt: StoredTimestamp;
+	acceptedAt: StoredTimestamp | null;
+} | null> {
+	const row = await db.orm.public.ProjectInvitations.where((i) =>
+		i.id.eq(invitationId),
+	).first();
+	if (!row) {
+		return null;
+	}
+	return {
+		id: row.id,
+		projectId: row.projectId,
+		email: row.email,
+		status: row.status,
+		tokenHash: row.tokenHash,
+		expiresAt: row.expiresAt,
+		acceptedAt: row.acceptedAt,
+	};
+}
+
+/** Invitations this suite created that the shared harness does not own. */
+export async function deleteInvitationsForProject(
+	projectId: string,
+): Promise<void> {
+	try {
+		await db.orm.public.ProjectInvitations.where((i) =>
+			i.projectId.eq(projectId),
+		).delete();
+	} catch {
+		// best-effort
+	}
 }
 
 // ---------------------------------------------------------------------------
